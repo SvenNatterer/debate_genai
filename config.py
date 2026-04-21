@@ -69,19 +69,20 @@ AGENT_LIBRARY = {
 }
 
 TOPIC_POOL = [
-    "What is the meaning of life?",
-    "Will AI kill human creativity?",
-    "Is human nature fundamentally good or selfish?",
-    "Do humans truly have free will, or is everything determined?",
-    "Is happiness the highest goal in life?",
-    "Is it ever morally acceptable to lie?",
-    "Is justice more important than freedom?",
-    "Does life have an objective meaning?",
-    "Are morality and ethics universal, or culturally relative?",
-    "Is suffering necessary for personal growth?",
-    "Should the individual submit to the common good?",
-    "Can we ever have certain knowledge?",
+    "Human life has an objective meaning.",
+    "AI will reduce human creativity overall.",
+    "Human nature is fundamentally good.",
+    "Humans have genuine free will.",
+    "Happiness should be the highest goal in life.",
+    "It is sometimes morally acceptable to lie.",
+    "Justice is more important than freedom.",
+    "Morality is universal rather than culturally relative.",
+    "Suffering is necessary for personal growth.",
+    "The individual should submit to the common good.",
+    "Certain knowledge is possible.",
+    "Technological progress does more good than harm.",
 ]
+
 
 STRATEGY_OPTIONS = [
     "Direct rebuttal",

@@ -1,33 +1,65 @@
 import json
 import os
 import random
+import urllib.error
+import urllib.request
+from urllib.parse import urljoin
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from config import AGENT_LIBRARY, PHILOSOPHER_LIBRARY, SYSTEM_PROMPT
 
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
+
+def can_reach_ollama(base_url: str, timeout: float = 2.0) -> bool:
+    health_url = base_url.rstrip("/") + "/api/tags"
+
+    try:
+        with urllib.request.urlopen(health_url, timeout=timeout) as response:
+            return response.status == 200
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError):
+        return False
 
 
-def get_client_and_model():
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
-    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+def get_ollama_status(base_url: str, model: str, timeout: float = 2.0) -> tuple[bool, str]:
+    health_url = base_url.rstrip("/") + "/api/tags"
 
-    if OpenAI is None:
-        return None, None
+    try:
+        with urllib.request.urlopen(health_url, timeout=timeout) as response:
+            if response.status != 200:
+                return False, f"Ollama error: /api/tags returned HTTP {response.status}."
 
-    if provider == "ollama":
-        return OpenAI(base_url=ollama_base_url, api_key="ollama"), ollama_model
+            raw = json.loads(response.read().decode("utf-8"))
+            models = raw.get("models", [])
+            installed_names = {item.get("name", "") for item in models if isinstance(item, dict)}
 
-    if os.getenv("OPENAI_API_KEY"):
-        return OpenAI(), openai_model
+            if model not in installed_names:
+                if installed_names:
+                    available = ", ".join(sorted(installed_names))
+                    return False, f"Ollama reachable, but model '{model}' is not installed. Installed models: {available}."
+                return False, f"Ollama reachable, but no models are installed. Missing model: '{model}'."
 
-    return None, None
+            return True, "ok"
+    except urllib.error.HTTPError as exc:
+        return False, f"Ollama HTTP error: {exc.code} {exc.reason}."
+    except urllib.error.URLError as exc:
+        return False, f"Ollama not reachable at {base_url}. Reason: {exc.reason}."
+    except TimeoutError:
+        return False, f"Ollama request timed out for {base_url}."
+    except json.JSONDecodeError:
+        return False, "Ollama returned invalid JSON for /api/tags."
+    except ValueError as exc:
+        return False, f"Invalid Ollama URL '{base_url}': {exc}."
+
+
+def get_client_and_model() -> tuple[str | None, str | None, str | None]:
+    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+    ok, status_message = get_ollama_status(ollama_base_url, ollama_model)
+    if not ok:
+        return None, None, status_message
+
+    return ollama_base_url.rstrip("/"), ollama_model, None
 
 
 def mock_response(agent_name: str, prompt: str) -> str:
@@ -68,28 +100,78 @@ def mock_response(agent_name: str, prompt: str) -> str:
     return " ".join(rng.sample(parts, k=min(2, len(parts))))
 
 
-def chat_completion(system_prompt: str, user_prompt: str) -> str:
-    client, model = get_client_and_model()
-    if client is None or model is None:
-        for role in ["Judge", "Summarizer"]:
-            if role in user_prompt:
-                return mock_response(role, user_prompt)
-        if "Agent:" in user_prompt:
-            first_line = [line for line in user_prompt.splitlines() if line.startswith("Agent:")]
-            if first_line:
-                agent_name = first_line[0].replace("Agent:", "").strip()
-                return mock_response(agent_name, user_prompt)
-        return "Mock mode response."
+def fallback_or_status_message(user_prompt: str, status_message: str | None) -> str:
+    if status_message:
+        return status_message
 
-    response = client.chat.completions.create(
-        model=model,
-        temperature=0.7,
-        messages=[
+    for role in ["Judge", "Summarizer"]:
+        if role in user_prompt:
+            return mock_response(role, user_prompt)
+    if "Agent:" in user_prompt:
+        first_line = [line for line in user_prompt.splitlines() if line.startswith("Agent:")]
+        if first_line:
+            agent_name = first_line[0].replace("Agent:", "").strip()
+            return mock_response(agent_name, user_prompt)
+    return "Mock mode response."
+
+
+def is_ollama_error_response(text: str) -> bool:
+    prefixes = (
+        "Ollama ",
+        "Invalid Ollama ",
+    )
+    return text.startswith(prefixes)
+
+
+def chat_completion(system_prompt: str, user_prompt: str) -> str:
+    base_url, model, status_message = get_client_and_model()
+    if base_url is None or model is None:
+        return fallback_or_status_message(user_prompt, status_message)
+
+    payload = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        "temperature": 0.7,
+        "stream": False,
+    }
+
+    request = urllib.request.Request(
+        urljoin(base_url + "/", "api/chat"),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
-    return response.choices[0].message.content
+
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+            if "error" in raw and raw["error"]:
+                return f"Ollama chat error: {raw['error']}"
+
+            message = raw.get("message", {})
+            content = message.get("content", "")
+            if content.strip():
+                return content.strip()
+            return "Ollama returned an empty response."
+    except urllib.error.HTTPError as exc:
+        try:
+            error_body = exc.read().decode("utf-8").strip()
+        except Exception:
+            error_body = ""
+        if error_body:
+            return f"Ollama HTTP error {exc.code}: {error_body}"
+        return f"Ollama HTTP error {exc.code}: {exc.reason}"
+    except urllib.error.URLError as exc:
+        return f"Ollama connection error at {base_url}: {exc.reason}"
+    except TimeoutError:
+        return f"Ollama request timed out for model '{model}'."
+    except json.JSONDecodeError:
+        return "Ollama returned invalid JSON for /api/chat."
+    except ValueError as exc:
+        return f"Invalid Ollama request configuration: {exc}"
 
 
 def strategy_to_instructions(strategy: str) -> str:
@@ -184,7 +266,10 @@ Instructions:
 - Keep it under {max_words} words.
 - Avoid bullet points.
 """
-        return chat_completion(SYSTEM_PROMPT, prompt).strip()
+        response = chat_completion(SYSTEM_PROMPT, prompt).strip()
+        if is_ollama_error_response(response):
+            return f"[ERROR] {response}"
+        return response
 
 
 def build_agents(agent_configs: List[Dict[str, str]]) -> List[DebateAgent]:
@@ -267,6 +352,24 @@ Return strict JSON with this schema:
 
     raw = chat_completion(SYSTEM_PROMPT, prompt).strip()
 
+    if is_ollama_error_response(raw):
+        speakers = sorted({t["speaker"] for t in transcript})
+        scores = {
+            s: {
+                "logic": 0,
+                "relevance": 0,
+                "rebuttal": 0,
+                "fairness": 0,
+                "total": 0,
+            }
+            for s in speakers
+        }
+        return {
+            "winner": "No winner",
+            "scores": scores,
+            "reasoning": raw,
+        }
+
     if raw.startswith("```"):
         raw = raw.strip("`")
         if raw.lower().startswith("json"):
@@ -322,4 +425,7 @@ Strongest points:
 - Contra: ...
 - Caveat: ...
 """
-    return chat_completion(SYSTEM_PROMPT, prompt).strip()
+    summary = chat_completion(SYSTEM_PROMPT, prompt).strip()
+    if is_ollama_error_response(summary):
+        return f"[ERROR] {summary}"
+    return summary

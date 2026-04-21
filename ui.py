@@ -77,13 +77,12 @@ def render_header() -> None:
     )
 
 
-def render_mode_status(provider_label: str, has_api_key: bool) -> None:
-    if provider_label == "openai" and not has_api_key:
-        st.markdown('<div class="small-status">Mock Mode Active</div>', unsafe_allow_html=True)
-    elif provider_label == "ollama":
+def render_mode_status(ollama_active: bool, status_message: str | None = None) -> None:
+    if ollama_active:
         st.markdown('<div class="small-status">Ollama Mode Active</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="small-status">OpenAI Mode Active</div>', unsafe_allow_html=True)
+        text = status_message or "Ollama Mode Not Active"
+        st.markdown(f'<div class="small-status">{text}</div>', unsafe_allow_html=True)
 
 
 def render_top_bar() -> None:
@@ -268,19 +267,6 @@ def render_versus_stage() -> None:
     progress_placeholder = st.empty()
     status_placeholder = st.empty()
 
-    for i in range(101):
-        progress_placeholder.progress(i)
-        remaining = max(0, 10 - int(i / 10))
-        status_placeholder.markdown(
-            f"""
-            <div class="small-status" style="margin-top:8px;">
-                Entering arena in {remaining}...
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        time.sleep(0.1)
-
     handle_run_debate()
     st.session_state["stage"] = 4
     st.rerun()
@@ -314,10 +300,13 @@ def render_arena_stage() -> None:
     transcript = st.session_state.get("transcript")
     judgment = st.session_state.get("judgment")
 
+    topic = st.session_state.get("topic", st.session_state.get("selected_topic", ""))
+
     st.markdown(
-        """
+        f"""
         <div class="arcade-panel" style="margin-bottom:18px;">
             <div class="topic-label">Debate Chat</div>
+            <div class="topic-text">{topic}</div>
         """,
         unsafe_allow_html=True,
     )
