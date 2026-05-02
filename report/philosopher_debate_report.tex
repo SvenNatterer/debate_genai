@@ -1,0 +1,167 @@
+\documentclass[11pt,a4paper]{article}
+
+% ---------- Packages ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{csquotes}
+
+% ---------- Page setup ----------
+\geometry{
+    margin=2.5cm
+}
+
+\setstretch{1.08}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=blue,
+    citecolor=black
+}
+
+% ---------- Title ----------
+\title{
+    \textbf{Philosopher Debate Arena}\\
+    \large A Multi-Agent LLM Debate Prototype
+}
+
+\author{
+    Your Name(s)\\
+    INF-3600 Generative Artificial Intelligence
+}
+
+\date{May 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This project explores the use of large language models as role-conditioned debate agents in an interactive philosopher-inspired debate arena. The system allows users to select two philosopher personas, assign them opposing positions, and generate a structured debate on a randomly selected topic. A separate judge agent evaluates the arguments according to predefined criteria. The goal of the project is not to accurately reconstruct historical philosophers, but to investigate how prompt-based persona conditioning, argumentation strategies, and LLM-based evaluation can be combined into a game-like generative AI prototype.
+\end{abstract}
+
+\section{Introduction}
+
+Large language models can generate fluent argumentative text and can be conditioned through prompts to adopt specific roles, styles, and perspectives. This project investigates whether such models can be used to create an interactive multi-agent debate environment in which philosopher-inspired agents argue about controversial topics using predefined argumentation strategies.
+
+The motivation behind the project is both technical and educational. From a technical perspective, the system explores prompt engineering, role-based agents, automated evaluation, and human-computer interaction. From an educational perspective, the prototype aims to make philosophical argumentation more accessible and interactive by presenting it in the form of a debate game.
+
+The main research question is:
+
+\begin{quote}
+To what extent can prompt-conditioned LLM agents produce distinguishable and coherent philosopher-inspired arguments in a structured debate setting?
+\end{quote}
+
+Importantly, the system is not intended to simulate philosophers with historical or scholarly accuracy. Instead, it creates philosopher-inspired argumentative styles based on model behavior and prompt constraints.
+
+\section{System Design}
+
+The system was implemented as an interactive Streamlit prototype. The application follows a game-like structure in which users progress through several stages: topic selection, character selection, debate generation, and final judgement.
+
+Users select two philosopher personas and assign them to opposing sides of a debate. Each agent receives a structured prompt containing the debate topic, assigned stance, philosopher persona, and argumentation strategy. The generated responses are then passed to a judge component, which evaluates the debate according to predefined criteria such as relevance, coherence, persuasiveness, and consistency with the selected persona.
+
+\subsection{Main Components}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{4cm} p{10cm}}
+\toprule
+\textbf{Component} & \textbf{Description} \\
+\midrule
+Frontend & Streamlit-based user interface with multiple game stages. \\
+Philosopher agents & LLM agents prompted to argue from philosopher-inspired perspectives. \\
+Argumentation strategies & Predefined styles such as logical reasoning, emotional appeal, or counterargument. \\
+Topic pool & A fixed set of debate topics randomly selected by the system. \\
+Judge agent & LLM-based evaluator that scores or comments on the debate. \\
+Backend & OpenAI API, local Ollama model, or mock mode fallback. \\
+\bottomrule
+\end{tabular}
+\caption{Overview of the main system components.}
+\label{tab:components}
+\end{table}
+
+\section{Methodology}
+
+The prototype was evaluated qualitatively by testing different combinations of philosophers, topics, argumentation strategies, and model backends. The purpose of the evaluation was to observe whether the generated debates differed in style, coherence, argument structure, and persona consistency.
+
+Unlike a model training experiment, this project does not evaluate learning curves or validation loss. Instead, the evaluation focuses on generated output quality and system behavior. The following test dimensions were considered:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{4cm} p{5cm} p{5cm}}
+\toprule
+\textbf{Test Dimension} & \textbf{Variation} & \textbf{Evaluation Focus} \\
+\midrule
+Philosopher persona & Nietzsche, Kant, Plato, etc. & Stylistic recognizability and consistency. \\
+Debate stance & Pro vs. Contra & Ability to argue from an assigned position. \\
+Argumentation strategy & Logical, emotional, counterargument & Influence on structure and tone. \\
+Debate topic & Ethics, AI, freedom, truth & Robustness across different domains. \\
+Model backend & OpenAI, Ollama, mock mode & Output quality and reliability. \\
+Judge behavior & Multiple debate outputs & Consistency and usefulness of evaluation. \\
+\bottomrule
+\end{tabular}
+\caption{Qualitative evaluation dimensions used for the prototype.}
+\label{tab:evaluation}
+\end{table}
+
+\section{Results}
+
+The prototype successfully generated structured debate outputs in which both agents responded to the same topic from opposing perspectives. In many cases, the selected philosopher personas were stylistically recognizable. For example, some personas produced more abstract and principle-based arguments, while others used more provocative, existential, or rhetorical language.
+
+The argumentation strategies also influenced the generated text. Logical strategies usually produced more structured and explicit arguments, while emotional strategies created more expressive and persuasive responses. Counterargument strategies often led to more direct engagement with the opposing position.
+
+However, the quality of the debate depended strongly on the selected model backend. Stronger models generally produced more coherent, persona-consistent, and context-aware responses. Weaker local models or mock mode outputs were more generic and less reliable.
+
+\subsection{Example Debate Excerpt}
+
+Insert one short example from your system here:
+
+\begin{quote}
+\textbf{Agent A:} Insert 2--4 sentences from the first philosopher here.
+
+\textbf{Agent B:} Insert 2--4 sentences from the second philosopher here.
+\end{quote}
+
+This example illustrates how the system can generate a structured debate exchange. The output shows whether the selected agents remain consistent with their assigned positions and whether the argumentation strategy influences the structure of the response.
+
+\section{Discussion}
+
+The results suggest that LLMs can be used to create convincing interactive debate experiences, especially when prompts clearly define persona, stance, and strategy. The system works well as a game-like educational prototype because it makes abstract philosophical positions more interactive and accessible.
+
+At the same time, the project has important limitations. The agents do not truly represent historical philosophers. Instead, they generate philosopher-inspired responses based on patterns learned during pretraining and the constraints specified in the prompt. This means that the outputs may reflect common cultural associations, simplified interpretations, or stereotypes rather than accurate philosophical reasoning.
+
+The judge agent is also limited. Since the judge is itself an LLM, its evaluation should not be treated as objective. It may reward rhetorical fluency, confidence, or surface-level coherence rather than philosophical accuracy. Therefore, the judge should be understood primarily as a game mechanic rather than as a reliable academic evaluator.
+
+\section{Limitations and Critical Reflection}
+
+A central limitation of the system is that philosopher personas are generated through prompt conditioning rather than through verified expert models or retrieval from primary philosophical texts. As a result, the outputs may resemble popular stereotypes of philosophers rather than accurate reconstructions of their arguments. For example, a Nietzsche-inspired agent may overuse themes such as individual strength or will to power, even when these ideas are not directly relevant to the selected debate topic.
+
+The system is also sensitive to prompt design. Small changes in wording can influence tone, structure, and persona consistency. This makes reproducibility difficult unless prompts and model settings are carefully documented.
+
+Another limitation is the judge component. The judge provides a useful game-like feedback mechanism, but it should not be interpreted as a reliable academic assessment. Since it is generated by an LLM, the judgement can be biased, inconsistent, or overly focused on fluent language.
+
+Finally, mock mode is useful for demonstrating the application flow, but it does not evaluate the actual quality of the LLM-based debate system. It should therefore be separated clearly from real model-based results.
+
+\section{Future Work}
+
+Future versions of the system could improve philosophical accuracy by integrating retrieval-augmented generation using primary texts from selected philosophers. This would allow agents to ground their arguments in actual source material rather than relying only on general model knowledge.
+
+A more robust evaluation method could also be added. For example, human users could rate debates based on coherence, persona consistency, persuasiveness, and educational value. These ratings could then be compared with the judge agent's evaluations.
+
+Additional improvements could include multi-round debates, memory across rounds, adjustable difficulty levels, improved scoring rubrics, and clearer separation between entertainment-oriented and educational modes.
+
+\section{Conclusion}
+
+This project demonstrates that LLMs can be used to build an interactive multi-agent debate prototype with philosopher-inspired personas and argumentation strategies. The system is successful as an exploratory and educational game-like application, especially because it allows users to compare different argumentative styles in a structured format.
+
+However, the prototype should not be understood as an accurate simulation of historical philosophers or as an objective evaluator of philosophical quality. Its main value lies in showing how prompt engineering, role-based agents, and LLM-based evaluation can be combined into an interactive generative AI system.
+
+\end{document}
