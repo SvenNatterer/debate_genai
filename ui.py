@@ -12,6 +12,14 @@ from debate_engine import (
     summarize_debate,
 )
 
+"""from debate_engine_cloud import (
+    judge_debate,
+    run_debate,
+    summarize_debate,
+)
+"""
+#optional cloud engine, uncomment import above and comment out import from debate_engine.py
+
 def image_to_data_uri(image_path: str) -> str:
     image_bytes = Path(image_path).read_bytes()
     encoded = base64.b64encode(image_bytes).decode("utf-8")

@@ -4,6 +4,9 @@ import streamlit as st
 
 from styles import inject_arcade_css
 from debate_engine import get_client_and_model
+#from debate_engine_cloud import get_client_and_model
+#for optional cloud engine, uncomment line above
+
 from ui import (
     ensure_session_state,
     render_arena_stage,
