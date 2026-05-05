@@ -52,13 +52,18 @@ _runtime_override: Dict[str, str] = {}
 
 def set_active_model(provider: str, model: str) -> None:
     """Called by the UI to select a model at runtime."""
+    _runtime_override["provider"] = provider
     _runtime_override["model"] = model
 
 
 def get_active_model_label() -> str:
     """Human-readable label for the currently active model."""
+    provider = _runtime_override.get("provider", "custom")
     model = _runtime_override.get("model") or os.getenv("CUSTOM_MODEL", "")
-    return f"Azure / {model}" if model else "Azure / (no model selected)"
+    if not model:
+        return "No model selected"
+    prefix = "Local" if provider == "local" else "Azure"
+    return f"{prefix} / {model}"
 
 
 # ---------------------------------------------------------------------------
@@ -68,15 +73,15 @@ def get_active_model_label() -> str:
 _AZURE_API_VERSION = "2024-12-01-preview"
 
 
-def _get_azure_config() -> Tuple[str, str, str]:
+def _get_azure_config(model: str = "") -> Tuple[str, str, str]:
     """
-    Returns (endpoint_url, model, api_key).
+    Returns (endpoint_url, resolved_model, api_key).
     Raises ValueError with a clear message if anything is missing.
     """
-    base_url    = os.getenv("CUSTOM_API_BASE_URL", "").rstrip("/")
-    api_key     = os.getenv("CUSTOM_API_KEY", "")
-    model       = _runtime_override.get("model") or os.getenv("CUSTOM_MODEL", "")
-    api_version = os.getenv("AZURE_API_VERSION", _AZURE_API_VERSION)
+    base_url       = os.getenv("CUSTOM_API_BASE_URL", "").rstrip("/")
+    api_key        = os.getenv("CUSTOM_API_KEY", "")
+    resolved_model = model or _runtime_override.get("model") or os.getenv("CUSTOM_MODEL", "")
+    api_version    = os.getenv("AZURE_API_VERSION", _AZURE_API_VERSION)
 
     if not base_url:
         raise ValueError(
@@ -89,19 +94,17 @@ def _get_azure_config() -> Tuple[str, str, str]:
             "CUSTOM_API_KEY is not set. "
             "Add your Azure API key to your .env file."
         )
-    if not model:
+    if not resolved_model:
         raise ValueError(
-            "No model selected. Choose one from the dropdown on the start screen."
+            "No model selected. Choose one from the dropdowns on the start screen."
         )
 
-    # Azure endpoint format:
-    # {base_url}/openai/deployments/{model}/chat/completions?api-version={version}
     endpoint = (
-        f"{base_url}/openai/deployments/{model}/chat/completions"
+        f"{base_url}/openai/deployments/{resolved_model}/chat/completions"
         f"?api-version={api_version}"
     )
 
-    return endpoint, model, api_key
+    return endpoint, resolved_model, api_key
 
 
 # ---------------------------------------------------------------------------
@@ -110,23 +113,15 @@ def _get_azure_config() -> Tuple[str, str, str]:
 
 def get_client_and_model() -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Returns (endpoint, model, status_message).
-    On success:  (endpoint, model, None)
-    On failure:  (None,     None,  "<human-readable status>")
+    Connectivity check used by the status bar in app.py.
+    Returns (base_url, "ready", None) when Azure credentials are configured,
+    or (None, None, "<message>") when not.
     """
     base_url = os.getenv("CUSTOM_API_BASE_URL", "")
     api_key  = os.getenv("CUSTOM_API_KEY", "")
-    model    = _runtime_override.get("model", "")
-
     if not base_url or not api_key:
         return None, None, "Azure not configured — check CUSTOM_API_BASE_URL and CUSTOM_API_KEY in .env"
-    if not model:
-        return None, None, "Select a model from the dropdown to begin"
-    try:
-        endpoint, model, _ = _get_azure_config()
-        return endpoint, model, None
-    except ValueError as exc:
-        return None, None, str(exc)
+    return base_url, "ready", None
 
 
 # ---------------------------------------------------------------------------
@@ -135,16 +130,68 @@ def get_client_and_model() -> Tuple[Optional[str], Optional[str], Optional[str]]
 
 def _is_error_response(text: str) -> bool:
     return text.startswith(("[ERROR]", "Azure API", "Configuration error", "No model",
-                            "CUSTOM_API_BASE_URL", "CUSTOM_API_KEY"))
+                            "CUSTOM_API_BASE_URL", "CUSTOM_API_KEY",
+                            "Ollama"))
 
 
-def chat_completion(system_prompt: str, user_prompt: str) -> str:
+def _chat_completion_ollama(system_prompt: str, user_prompt: str, model: str = "") -> str:
+    """Send a chat request to a local Ollama instance."""
+    base_url       = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    resolved_model = model or _runtime_override.get("model") or os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+
+    payload = {
+        "model": resolved_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.7,
+        "stream": False,
+    }
+    request = urllib.request.Request(
+        f"{base_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+            if "error" in raw and raw["error"]:
+                return f"Ollama error: {raw['error']}"
+            content = raw.get("message", {}).get("content", "")
+            return content.strip() if content.strip() else "Ollama returned an empty response."
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8").strip()
+        except Exception:
+            body = ""
+        return f"Ollama HTTP error {exc.code}: {body or exc.reason}"
+    except urllib.error.URLError as exc:
+        return f"Ollama connection error at {base_url}: {exc.reason}"
+    except TimeoutError:
+        return f"Ollama request timed out for model '{resolved_model}'."
+    except json.JSONDecodeError:
+        return "Ollama returned invalid JSON."
+
+
+def chat_completion(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    provider: str = "",
+    model: str = "",
+) -> str:
     """
-    Sends a chat request to Azure and returns the assistant reply as a string.
+    Sends a chat request to the given provider/model (or falls back to _runtime_override).
     Returns a descriptive error string (never raises) so the UI can surface it.
     """
+    resolved_provider = provider or _runtime_override.get("provider", "custom")
+    if resolved_provider == "local":
+        return _chat_completion_ollama(system_prompt, user_prompt, model=model)
+
     try:
-        endpoint, model, api_key = _get_azure_config()
+        endpoint, resolved_model, api_key = _get_azure_config(model=model)
     except ValueError as exc:
         return str(exc)
 
@@ -187,7 +234,7 @@ def chat_completion(system_prompt: str, user_prompt: str) -> str:
         return f"Azure API connection error: {exc.reason}"
 
     except TimeoutError:
-        return f"Azure API request timed out for model '{model}'."
+        return f"Azure API request timed out for model '{resolved_model}'."
 
     except json.JSONDecodeError:
         return "Azure API returned invalid JSON."
@@ -242,6 +289,8 @@ class DebateAgent:
     philosopher_stance: str = ""
     image: str = ""
     side: str = ""
+    agent_provider: str = ""
+    agent_model: str = ""
 
     def respond(
         self,
@@ -291,7 +340,11 @@ Instructions:
 - Keep it under {max_words} words.
 - Avoid bullet points.
 """
-        response = chat_completion(SYSTEM_PROMPT, prompt).strip()
+        response = chat_completion(
+            SYSTEM_PROMPT, prompt,
+            provider=self.agent_provider,
+            model=self.agent_model,
+        ).strip()
         if _is_error_response(response):
             return f"[ERROR] {response}"
         return response
@@ -320,6 +373,8 @@ def build_agents(agent_configs: List[Dict[str, str]]) -> List[DebateAgent]:
             philosopher_stance=philosopher["stance"],
             image=philosopher["image"],
             side=side,
+            agent_provider=cfg.get("provider", ""),
+            agent_model=cfg.get("model", ""),
         ))
     return agents
 
@@ -349,7 +404,13 @@ def run_debate(
 # Judge
 # ---------------------------------------------------------------------------
 
-def judge_debate(topic: str, transcript: List[Dict[str, str]]) -> Dict[str, Any]:
+def judge_debate(
+    topic: str,
+    transcript: List[Dict[str, str]],
+    *,
+    judge_provider: str = "",
+    judge_model: str = "",
+) -> Dict[str, Any]:
     history = "\n".join(f"{t['speaker']}: {t['text']}" for t in transcript)
 
     prompt = f"""
@@ -378,7 +439,11 @@ Return strict JSON with this schema:
   "reasoning": "2-4 sentences"
 }}
 """
-    raw = chat_completion(SYSTEM_PROMPT, prompt).strip()
+    raw = chat_completion(
+        SYSTEM_PROMPT, prompt,
+        provider=judge_provider,
+        model=judge_model,
+    ).strip()
 
     if _is_error_response(raw):
         speakers = sorted({t["speaker"] for t in transcript})
@@ -418,6 +483,9 @@ def summarize_debate(
     topic: str,
     transcript: List[Dict[str, str]],
     judgment: Dict[str, Any],
+    *,
+    judge_provider: str = "",
+    judge_model: str = "",
 ) -> str:
     history = "\n".join(f"{t['speaker']}: {t['text']}" for t in transcript)
 
@@ -442,7 +510,11 @@ Strongest points:
 - Contra: ...
 - Caveat: ...
 """
-    summary = chat_completion(SYSTEM_PROMPT, prompt).strip()
+    summary = chat_completion(
+        SYSTEM_PROMPT, prompt,
+        provider=judge_provider,
+        model=judge_model,
+    ).strip()
     if _is_error_response(summary):
         return f"[ERROR] {summary}"
     return summary
