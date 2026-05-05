@@ -10,8 +10,6 @@ from debate_engine_cloud import (
     judge_debate,
     run_debate,
     summarize_debate,
-    set_active_model,
-    get_active_model_label,
 )
 
 
@@ -25,7 +23,7 @@ MODEL_OPTIONS = {
     "Llama 4 Maverick  (Platform)":   ("custom", "Llama-4-Maverick-17B-128E-Instruct-FP8"),
     "Llama 3.3 70B  (Platform)":      ("custom", "Llama-3.3-70B-Instruct"),
     "Phi-4 mini  (Platform)":         ("custom", "Phi-4-mini-reasoning"),
-
+    "Llama3.2:1b (Local)":            ("local", "llama3.2:1b"),
 }
 
 
@@ -42,8 +40,11 @@ def reset_game() -> None:
     st.session_state["player2_strategy"] = STRATEGY_OPTIONS[0]
     st.session_state["agent1_philosopher_name"] = PHILOSOPHER_LIBRARY["socrates"]["name"]
     st.session_state["agent2_philosopher_name"] = PHILOSOPHER_LIBRARY["nietzsche"]["name"]
-    st.session_state.setdefault("selected_model_label", list(MODEL_OPTIONS.keys())[0])
-    
+    _default_model = list(MODEL_OPTIONS.keys())[0]
+    st.session_state.setdefault("agent1_model_label", _default_model)
+    st.session_state.setdefault("agent2_model_label", _default_model)
+    st.session_state.setdefault("judge_model_label",  _default_model)
+
     for key in [
         "transcript",
         "judgment",
@@ -69,7 +70,10 @@ def ensure_session_state() -> None:
     st.session_state.setdefault(
         "agent2_philosopher_name", PHILOSOPHER_LIBRARY["nietzsche"]["name"]
     )
-    st.session_state.setdefault("selected_model_label", list(MODEL_OPTIONS.keys())[0])
+    _default_model = list(MODEL_OPTIONS.keys())[0]
+    st.session_state.setdefault("agent1_model_label", _default_model)
+    st.session_state.setdefault("agent2_model_label", _default_model)
+    st.session_state.setdefault("judge_model_label",  _default_model)
 
 
 def current_agent_configs():
@@ -99,8 +103,7 @@ def render_header() -> None:
 def render_mode_status(cloud_active: bool, status_message: str | None = None) -> None:
     import html as _html
     if cloud_active:
-        label = get_active_model_label()
-        st.markdown(f'<div class="small-status">Azure Active · {_html.escape(label)}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-status">Debate engine ready</div>', unsafe_allow_html=True)
     else:
         text = status_message or "Azure not configured — check your .env file"
         st.markdown(f'<div class="small-status">{_html.escape(text)}</div>', unsafe_allow_html=True)
@@ -186,21 +189,32 @@ def render_start_screen() -> None:
 
     st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
 
-    model_label = st.selectbox(
-        "🤖 LLM Model",
-        options=list(MODEL_OPTIONS.keys()),
-        index=list(MODEL_OPTIONS.keys()).index(st.session_state["selected_model_label"]),
-        key="selected_model_label",
-        help="Choose which cloud model powers the debate. Requires the matching API key in your .env file.",
-    )
-
-    provider, model = MODEL_OPTIONS[model_label]
-    set_active_model(provider, model)
-
-    st.markdown(
-        f"<div class='small-status' style='margin-bottom:1rem;'>Active: {provider.upper()} / {model}</div>",
-        unsafe_allow_html=True,
-    )
+    model_keys = list(MODEL_OPTIONS.keys())
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.selectbox(
+            "🤖 Player 1 Model",
+            options=model_keys,
+            index=model_keys.index(st.session_state["agent1_model_label"]),
+            key="agent1_model_label",
+            help="Model used by the FOR debater.",
+        )
+    with col2:
+        st.selectbox(
+            "🤖 Player 2 Model",
+            options=model_keys,
+            index=model_keys.index(st.session_state["agent2_model_label"]),
+            key="agent2_model_label",
+            help="Model used by the AGAINST debater.",
+        )
+    with col3:
+        st.selectbox(
+            "⚖️ Judge Model",
+            options=model_keys,
+            index=model_keys.index(st.session_state["judge_model_label"]),
+            key="judge_model_label",
+            help="Model used by the judge and summarizer.",
+        )
 
     if st.button("Start Game", type="primary", use_container_width=True):
         st.session_state["stage"] = 1
@@ -312,7 +326,25 @@ def render_versus_stage() -> None:
 
 
 def handle_run_debate() -> None:
-    agent_configs = current_agent_configs()
+    philosopher_options = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
+
+    agent1_provider, agent1_model = MODEL_OPTIONS[st.session_state["agent1_model_label"]]
+    agent2_provider, agent2_model = MODEL_OPTIONS[st.session_state["agent2_model_label"]]
+    judge_provider,  judge_model  = MODEL_OPTIONS[st.session_state["judge_model_label"]]
+
+    agent_configs = [
+        {
+            "philosopher_key": philosopher_options[st.session_state["agent1_philosopher_name"]],
+            "provider": agent1_provider,
+            "model":    agent1_model,
+        },
+        {
+            "philosopher_key": philosopher_options[st.session_state["agent2_philosopher_name"]],
+            "provider": agent2_provider,
+            "model":    agent2_model,
+        },
+    ]
+
     transcript = run_debate(
         st.session_state["selected_topic"],
         st.session_state["rounds"],
@@ -322,8 +354,14 @@ def handle_run_debate() -> None:
         ],
         agent_configs,
     )
-    judgment = judge_debate(st.session_state["selected_topic"], transcript)
-    summary = summarize_debate(st.session_state["selected_topic"], transcript, judgment)
+    judgment = judge_debate(
+        st.session_state["selected_topic"], transcript,
+        judge_provider=judge_provider, judge_model=judge_model,
+    )
+    summary = summarize_debate(
+        st.session_state["selected_topic"], transcript, judgment,
+        judge_provider=judge_provider, judge_model=judge_model,
+    )
 
     st.session_state["transcript"] = transcript
     st.session_state["judgment"] = judgment
