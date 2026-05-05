@@ -3,9 +3,7 @@ import os
 import streamlit as st
 
 from styles import inject_arcade_css
-from debate_engine import get_client_and_model
-#from debate_engine_cloud import get_client_and_model
-#for optional cloud engine, uncomment line above
+from debate_engine_cloud import get_client_and_model
 
 from ui import (
     ensure_session_state,
@@ -31,8 +29,8 @@ def main() -> None:
     render_header()
 
     base_url, model, status_message = get_client_and_model()
-    ollama_active = base_url is not None and model is not None
-    render_mode_status(ollama_active, status_message)
+    cloud_active = base_url is not None and model is not None
+    render_mode_status(cloud_active, status_message)
     render_top_bar()
 
     stage = st.session_state["stage"]
