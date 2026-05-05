@@ -6,19 +6,28 @@ from pathlib import Path
 import streamlit as st
 
 from config import PHILOSOPHER_LIBRARY, STRATEGY_OPTIONS, random_topic
-from debate_engine import (
+from debate_engine_cloud import (
     judge_debate,
     run_debate,
     summarize_debate,
+    set_active_model,
+    get_active_model_label,
 )
 
-"""from debate_engine_cloud import (
-    judge_debate,
-    run_debate,
-    summarize_debate,
-)
-"""
-#optional cloud engine, uncomment import above and comment out import from debate_engine.py
+
+# Available models shown in the UI selector
+MODEL_OPTIONS = {
+    "GPT-5-chat  (Platform)":         ("custom", "gpt-5-chat"),
+    "GPT-4.1 mini  (Platform)":       ("custom", "gpt-4.1-mini"),
+    "DeepSeek-V3.2  (Platform)":      ("custom", "DeepSeek-V3.2"),
+    "Mistral Large 3  (Platform)":    ("custom", "mistral-Large-3"),
+    "Mistral Small  (Platform)":      ("custom", "mistral-small-2503"),
+    "Llama 4 Maverick  (Platform)":   ("custom", "Llama-4-Maverick-17B-128E-Instruct-FP8"),
+    "Llama 3.3 70B  (Platform)":      ("custom", "Llama-3.3-70B-Instruct"),
+    "Phi-4 mini  (Platform)":         ("custom", "Phi-4-mini-reasoning"),
+
+}
+
 
 def image_to_data_uri(image_path: str) -> str:
     image_bytes = Path(image_path).read_bytes()
@@ -33,7 +42,8 @@ def reset_game() -> None:
     st.session_state["player2_strategy"] = STRATEGY_OPTIONS[0]
     st.session_state["agent1_philosopher_name"] = PHILOSOPHER_LIBRARY["socrates"]["name"]
     st.session_state["agent2_philosopher_name"] = PHILOSOPHER_LIBRARY["nietzsche"]["name"]
-
+    st.session_state.setdefault("selected_model_label", list(MODEL_OPTIONS.keys())[0])
+    
     for key in [
         "transcript",
         "judgment",
@@ -59,6 +69,7 @@ def ensure_session_state() -> None:
     st.session_state.setdefault(
         "agent2_philosopher_name", PHILOSOPHER_LIBRARY["nietzsche"]["name"]
     )
+    st.session_state.setdefault("selected_model_label", list(MODEL_OPTIONS.keys())[0])
 
 
 def current_agent_configs():
@@ -85,12 +96,14 @@ def render_header() -> None:
     )
 
 
-def render_mode_status(ollama_active: bool, status_message: str | None = None) -> None:
-    if ollama_active:
-        st.markdown('<div class="small-status">Ollama Mode Active</div>', unsafe_allow_html=True)
+def render_mode_status(cloud_active: bool, status_message: str | None = None) -> None:
+    import html as _html
+    if cloud_active:
+        label = get_active_model_label()
+        st.markdown(f'<div class="small-status">Azure Active · {_html.escape(label)}</div>', unsafe_allow_html=True)
     else:
-        text = status_message or "Ollama Mode Not Active"
-        st.markdown(f'<div class="small-status">{text}</div>', unsafe_allow_html=True)
+        text = status_message or "Azure not configured — check your .env file"
+        st.markdown(f'<div class="small-status">{_html.escape(text)}</div>', unsafe_allow_html=True)
 
 
 def render_top_bar() -> None:
@@ -168,6 +181,24 @@ def render_start_screen() -> None:
             <div class="blink" style="font-size:1.2rem; font-weight:800; color:#ffd54a;">Press Start</div>
         </div>
         """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+
+    model_label = st.selectbox(
+        "🤖 LLM Model",
+        options=list(MODEL_OPTIONS.keys()),
+        index=list(MODEL_OPTIONS.keys()).index(st.session_state["selected_model_label"]),
+        key="selected_model_label",
+        help="Choose which cloud model powers the debate. Requires the matching API key in your .env file.",
+    )
+
+    provider, model = MODEL_OPTIONS[model_label]
+    set_active_model(provider, model)
+
+    st.markdown(
+        f"<div class='small-status' style='margin-bottom:1rem;'>Active: {provider.upper()} / {model}</div>",
         unsafe_allow_html=True,
     )
 
