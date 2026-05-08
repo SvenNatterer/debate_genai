@@ -1,7 +1,8 @@
 """
 debate_engine_cloud.py
 ======================
-Debate engine backed by Azure AI Services (Azure OpenAI / Azure AI Foundry).
+Debate engine backed by Azure AI Services (Azure OpenAI / Azure AI Foundry)
+or a local Ollama instance, routed per-call.
 
 Required .env entries
 ---------------------
@@ -9,28 +10,26 @@ Required .env entries
                          https://gpt-course.cognitiveservices.azure.com
   CUSTOM_API_KEY       – your Azure API key
   AZURE_API_VERSION    – optional, default "2024-12-01-preview"
+  OLLAMA_BASE_URL      – optional, default "http://localhost:11434"
 
-Azure request format
---------------------
-  POST {base_url}/openai/deployments/{model}/chat/completions
-       ?api-version={api_version}
-  Header: api-key: {CUSTOM_API_KEY}
+Every call to chat_completion() requires explicit provider= and model= kwargs.
+There is no global default or silent fallback — missing values return an error string.
 
-Public interface (identical to original debate_engine.py)
----------------------------------------------------------
+Public interface
+----------------
   get_client_and_model()
-  chat_completion(system_prompt, user_prompt)
-  set_active_model(provider, model)
-  get_active_model_label()
+  chat_completion(system_prompt, user_prompt, *, provider, model)
   build_agents(agent_configs)
   run_debate(topic, rounds, strategies, agent_configs)
-  judge_debate(topic, transcript)
-  summarize_debate(topic, transcript, judgment)
+  judge_debate(topic, transcript, *, judge_provider, judge_model, focus)
+  aggregate_judgments(judgments)
+  summarize_debate(topic, transcript, judgment, *, judge_provider, judge_model)
 """
 
 import json
 import os
 import random
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -44,44 +43,21 @@ from config import AGENT_LIBRARY, PHILOSOPHER_LIBRARY, SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
-# Runtime model override (set by the UI dropdown)
-# ---------------------------------------------------------------------------
-
-_runtime_override: Dict[str, str] = {}
-
-
-def set_active_model(provider: str, model: str) -> None:
-    """Called by the UI to select a model at runtime."""
-    _runtime_override["provider"] = provider
-    _runtime_override["model"] = model
-
-
-def get_active_model_label() -> str:
-    """Human-readable label for the currently active model."""
-    provider = _runtime_override.get("provider", "custom")
-    model = _runtime_override.get("model") or os.getenv("CUSTOM_MODEL", "")
-    if not model:
-        return "No model selected"
-    prefix = "Local" if provider == "local" else "Azure"
-    return f"{prefix} / {model}"
-
-
-# ---------------------------------------------------------------------------
 # Azure configuration
 # ---------------------------------------------------------------------------
 
 _AZURE_API_VERSION = "2024-12-01-preview"
 
 
-def _get_azure_config(model: str = "") -> Tuple[str, str, str]:
+def _get_azure_config(model: str) -> Tuple[str, str, str]:
     """
-    Returns (endpoint_url, resolved_model, api_key).
-    Raises ValueError with a clear message if anything is missing.
+    Returns (endpoint_url, model, api_key).
+    Raises ValueError with a clear message if credentials are missing.
+    model must be non-empty — caller is responsible.
     """
-    base_url       = os.getenv("CUSTOM_API_BASE_URL", "").rstrip("/")
-    api_key        = os.getenv("CUSTOM_API_KEY", "")
-    resolved_model = model or _runtime_override.get("model") or os.getenv("CUSTOM_MODEL", "")
-    api_version    = os.getenv("AZURE_API_VERSION", _AZURE_API_VERSION)
+    base_url    = os.getenv("CUSTOM_API_BASE_URL", "").rstrip("/")
+    api_key     = os.getenv("CUSTOM_API_KEY", "")
+    api_version = os.getenv("AZURE_API_VERSION", _AZURE_API_VERSION)
 
     if not base_url:
         raise ValueError(
@@ -94,17 +70,13 @@ def _get_azure_config(model: str = "") -> Tuple[str, str, str]:
             "CUSTOM_API_KEY is not set. "
             "Add your Azure API key to your .env file."
         )
-    if not resolved_model:
-        raise ValueError(
-            "No model selected. Choose one from the dropdowns on the start screen."
-        )
 
     endpoint = (
-        f"{base_url}/openai/deployments/{resolved_model}/chat/completions"
+        f"{base_url}/openai/deployments/{model}/chat/completions"
         f"?api-version={api_version}"
     )
 
-    return endpoint, resolved_model, api_key
+    return endpoint, model, api_key
 
 
 # ---------------------------------------------------------------------------
@@ -134,10 +106,42 @@ def _is_error_response(text: str) -> bool:
                             "Ollama"))
 
 
-def _chat_completion_ollama(system_prompt: str, user_prompt: str, model: str = "") -> str:
-    """Send a chat request to a local Ollama instance."""
+def _parse_json_response(text: str) -> Optional[Dict[str, Any]]:
+    """Extract a JSON object from model output using progressively looser strategies.
+
+    Models — especially small ones — often wrap JSON in prose or code fences.
+    Strategy order: direct parse → code fence extraction → first-brace heuristic.
+    """
+    # 1. Direct parse (ideal case — model returned only JSON)
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # 2. Markdown code fence: ```json { ... } ``` or ``` { ... } ```
+    match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            pass
+
+    # 3. First { to last } — handles prose before/after the JSON block
+    start = text.find('{')
+    end   = text.rfind('}')
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except Exception:
+            pass
+
+    return None
+
+
+def _chat_completion_ollama(system_prompt: str, user_prompt: str, model: str) -> str:
+    """Send a chat request to a local Ollama instance. model must be non-empty."""
     base_url       = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    resolved_model = model or _runtime_override.get("model") or os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+    resolved_model = model
 
     payload = {
         "model": resolved_model,
@@ -183,11 +187,16 @@ def chat_completion(
     model: str = "",
 ) -> str:
     """
-    Sends a chat request to the given provider/model (or falls back to _runtime_override).
+    Routes a chat request to Ollama (provider='local') or Azure (provider='custom').
+    provider and model must both be non-empty — no silent fallback exists.
     Returns a descriptive error string (never raises) so the UI can surface it.
     """
-    resolved_provider = provider or _runtime_override.get("provider", "custom")
-    if resolved_provider == "local":
+    if not provider or not model:
+        return (
+            "[ERROR] No model/provider specified for this call. "
+            "Select a model in the start screen and try again."
+        )
+    if provider == "local":
         return _chat_completion_ollama(system_prompt, user_prompt, model=model)
 
     try:
@@ -404,39 +413,61 @@ def run_debate(
 # Judge
 # ---------------------------------------------------------------------------
 
+_JUDGE_METRICS = [
+    "logical_validity",
+    "argument_strength",
+    "counterargument_handling",
+    "clarity",
+    "relevance",
+]
+
+
 def judge_debate(
     topic: str,
     transcript: List[Dict[str, str]],
     *,
     judge_provider: str = "",
     judge_model: str = "",
+    focus: str = "",
 ) -> Dict[str, Any]:
     history = "\n".join(f"{t['speaker']}: {t['text']}" for t in transcript)
 
-    prompt = f"""
-Agent: Judge
-Goal: {AGENT_LIBRARY['judge']['goal']}
-Style: {AGENT_LIBRARY['judge']['style']}
+    focus_block = (
+        f"\nSpecialisation:\n{focus}\n"
+        f"Score all five metrics, but apply extra scrutiny in your area of focus.\n"
+    ) if focus else ""
 
-Topic:
-{topic}
+    # Speaker names taken directly from transcript so the model can copy them exactly.
+    speakers = sorted({t["speaker"] for t in transcript})
+    speaker_list = "\n".join(f'  "{s}"' for s in speakers)
+
+    history = "\n".join(f"{t['speaker']}: {t['text']}" for t in transcript)
+
+    prompt = f"""You are a strict debate judge. Evaluate the debate below and return ONLY a JSON object — no explanation, no prose, no markdown. Your entire response must begin with {{ and end with }}.
+{focus_block}
+Scoring criteria (each 1–10):
+- logical_validity: Are arguments logically sound?
+- argument_strength: How well-supported are the claims?
+- counterargument_handling: How well does each side rebut the opponent?
+- clarity: How clearly are ideas expressed?
+- relevance: How well does each speaker stay on topic?
+Total = sum of the five scores (5–50).
+
+Topic: {topic}
+
+Speakers (use these exact strings as keys):
+{speaker_list}
 
 Transcript:
 {history}
 
-Return strict JSON with this schema:
+Return this exact JSON structure (replace placeholder values):
 {{
-  "winner": "agent name",
+  "winner": "<exact speaker name>",
   "scores": {{
-    "agent name": {{
-      "logic": 1-10,
-      "relevance": 1-10,
-      "rebuttal": 1-10,
-      "fairness": 1-10,
-      "total": 1-40
-    }}
+{chr(10).join(f'    "{s}": {{"logical_validity": 7, "argument_strength": 7, "counterargument_handling": 7, "clarity": 7, "relevance": 7, "total": 35}}' for s in speakers)}
   }},
-  "reasoning": "2-4 sentences"
+  "reasoning": "2-4 sentence explanation of the winner."
 }}
 """
     raw = chat_completion(
@@ -445,34 +476,58 @@ Return strict JSON with this schema:
         model=judge_model,
     ).strip()
 
+    _zero = {m: 0 for m in _JUDGE_METRICS}
+    _zero["total"] = 0
+
     if _is_error_response(raw):
-        speakers = sorted({t["speaker"] for t in transcript})
         return {
             "winner":    "No winner",
-            "scores":    {s: {"logic": 0, "relevance": 0, "rebuttal": 0, "fairness": 0, "total": 0} for s in speakers},
+            "scores":    {s: dict(_zero) for s in speakers},
             "reasoning": raw,
         }
 
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.lower().startswith("json"):
-            raw = raw[4:].strip()
+    parsed = _parse_json_response(raw)
+    if parsed is not None:
+        return parsed
 
-    try:
-        return json.loads(raw)
-    except Exception:
-        speakers = sorted({t["speaker"] for t in transcript})
-        scores   = {}
-        for s in speakers:
-            lo, re, rb, fa = (random.randint(6, 9), random.randint(6, 9),
-                              random.randint(5, 9), random.randint(6, 9))
-            scores[s] = {"logic": lo, "relevance": re, "rebuttal": rb,
-                         "fairness": fa, "total": lo + re + rb + fa}
-        return {
-            "winner":    max(scores, key=lambda k: scores[k]["total"]),
-            "scores":    scores,
-            "reasoning": "Fallback scoring used because the model did not return valid JSON.",
-        }
+    # Fallback: random scores so the UI always has something to render
+    scores = {}
+    for s in speakers:
+        vals = {m: random.randint(5, 9) for m in _JUDGE_METRICS}
+        vals["total"] = sum(vals[m] for m in _JUDGE_METRICS)
+        scores[s] = vals
+    return {
+        "winner":    max(scores, key=lambda k: scores[k]["total"]),
+        "scores":    scores,
+        "reasoning": f"Could not parse model output as JSON. Raw response: {raw[:300]}",
+    }
+
+
+def aggregate_judgments(judgments: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Average scores from multiple judge calls into a single judgment."""
+    if len(judgments) == 1:
+        return judgments[0]
+
+    speakers: List[str] = []
+    for j in judgments:
+        for s in j.get("scores", {}):
+            if s not in speakers:
+                speakers.append(s)
+
+    aggregated: Dict[str, Any] = {}
+    for s in speakers:
+        avg: Dict[str, Any] = {}
+        for m in _JUDGE_METRICS:
+            values = [j["scores"].get(s, {}).get(m, 0) for j in judgments]
+            avg[m] = round(sum(values) / len(values), 1)
+        avg["total"] = round(sum(avg[m] for m in _JUDGE_METRICS), 1)
+        aggregated[s] = avg
+
+    winner = max(aggregated, key=lambda k: aggregated[k]["total"])
+    reasoning = " | ".join(
+        j.get("reasoning", "") for j in judgments if j.get("reasoning")
+    )
+    return {"winner": winner, "scores": aggregated, "reasoning": reasoning}
 
 
 # ---------------------------------------------------------------------------
