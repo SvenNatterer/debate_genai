@@ -42,6 +42,9 @@ load_dotenv()
 from config import AGENT_LIBRARY, PHILOSOPHER_LIBRARY, SYSTEM_PROMPT
 
 
+TOKEN_USAGE_LOG: List[Dict[str, Any]] = []
+
+
 # ---------------------------------------------------------------------------
 # Azure configuration
 # ---------------------------------------------------------------------------
@@ -106,6 +109,56 @@ def _is_error_response(text: str) -> bool:
                             "Ollama"))
 
 
+def reset_token_usage() -> None:
+    TOKEN_USAGE_LOG.clear()
+
+
+def get_token_usage() -> List[Dict[str, Any]]:
+    return [dict(entry) for entry in TOKEN_USAGE_LOG]
+
+
+def _call_label_from_prompt(user_prompt: str) -> str:
+    for line in user_prompt.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Agent:"):
+            return stripped.replace("Agent:", "", 1).strip() or "Agent"
+    if "strict debate judge" in user_prompt.lower():
+        return "Judge"
+    return "Model call"
+
+
+def _record_token_usage(
+    *,
+    provider: str,
+    model: str,
+    user_prompt: str,
+    usage: Dict[str, Any],
+) -> None:
+    if not usage:
+        return
+
+    prompt_tokens = (
+        usage.get("prompt_tokens")
+        or usage.get("prompt_eval_count")
+        or 0
+    )
+    completion_tokens = (
+        usage.get("completion_tokens")
+        or usage.get("eval_count")
+        or 0
+    )
+    total_tokens = usage.get("total_tokens") or (prompt_tokens + completion_tokens)
+
+    TOKEN_USAGE_LOG.append({
+        "call": _call_label_from_prompt(user_prompt),
+        "provider": provider,
+        "model": model,
+        "prompt_tokens": int(prompt_tokens or 0),
+        "completion_tokens": int(completion_tokens or 0),
+        "total_tokens": int(total_tokens or 0),
+    })
+
+
 def _parse_json_response(text: str) -> Optional[Dict[str, Any]]:
     """Extract a JSON object from model output using progressively looser strategies.
 
@@ -163,6 +216,12 @@ def _chat_completion_ollama(system_prompt: str, user_prompt: str, model: str) ->
             raw = json.loads(response.read().decode("utf-8"))
             if "error" in raw and raw["error"]:
                 return f"Ollama error: {raw['error']}"
+            _record_token_usage(
+                provider="local",
+                model=resolved_model,
+                user_prompt=user_prompt,
+                usage=raw,
+            )
             content = raw.get("message", {}).get("content", "")
             return content.strip() if content.strip() else "Ollama returned an empty response."
     except urllib.error.HTTPError as exc:
@@ -228,6 +287,12 @@ def chat_completion(
             choices = raw.get("choices", [])
             if not choices:
                 return "Azure API returned no choices in response."
+            _record_token_usage(
+                provider=provider,
+                model=resolved_model,
+                user_prompt=user_prompt,
+                usage=raw.get("usage", {}),
+            )
             content = choices[0].get("message", {}).get("content", "")
             return content.strip() if content.strip() else "Azure API returned an empty response."
 
@@ -397,6 +462,7 @@ def run_debate(
     rounds: int,
     player_strategies: List[str],
     agent_configs: List[Dict[str, str]],
+    max_words: int = 120,
 ) -> List[Dict[str, str]]:
     transcript: List[Dict[str, str]] = []
     agents = build_agents(agent_configs)
@@ -404,7 +470,7 @@ def run_debate(
         for idx, agent in enumerate(agents):
             transcript.append({
                 "speaker": agent.name,
-                "text":    agent.respond(topic, transcript, r, player_strategies[idx]),
+                "text":    agent.respond(topic, transcript, r, player_strategies[idx], max_words=max_words),
             })
     return transcript
 

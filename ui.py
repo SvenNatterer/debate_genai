@@ -8,7 +8,9 @@ import streamlit as st
 from config import PHILOSOPHER_LIBRARY, STRATEGY_OPTIONS, random_topic
 from debate_engine_cloud import (
     aggregate_judgments,
+    get_token_usage,
     judge_debate,
+    reset_token_usage,
     run_debate,
     summarize_debate,
 )
@@ -57,6 +59,10 @@ MODEL_OPTIONS = {
     "Llama 3.3 70B  (Platform)":      ("custom", "Llama-3.3-70B-Instruct"),
 }
 
+DEFAULT_AGENT_MAX_WORDS = 120
+MIN_AGENT_MAX_WORDS = 40
+MAX_AGENT_MAX_WORDS = 300
+
 
 def image_to_data_uri(image_path: str) -> str:
     image_bytes = Path(image_path).read_bytes()
@@ -67,6 +73,10 @@ _DEBATE_PARAM_KEYS = [
     "_dp_phil1", "_dp_phil2", "_dp_model1", "_dp_model2",
     "_dp_strat1", "_dp_strat2", "_dp_num_judges",
     "_dp_judge1_model", "_dp_judge2_model", "_dp_judge3_model",
+    "_dp_agent_configs", "_dp_agent_max_words",
+    "_dp_developer_mode",
+    "_character_stage_seeded",
+    "_loading_screen_primed",
 ]
 
 
@@ -76,6 +86,8 @@ def reset_game() -> None:
     st.session_state["rounds"] = 2
     st.session_state["player1_strategy"] = STRATEGY_OPTIONS[0]
     st.session_state["player2_strategy"] = STRATEGY_OPTIONS[0]
+    st.session_state["ui_agent1_philosopher_name"] = PHILOSOPHER_LIBRARY["socrates"]["name"]
+    st.session_state["ui_agent2_philosopher_name"] = PHILOSOPHER_LIBRARY["nietzsche"]["name"]
     st.session_state["agent1_philosopher_name"] = PHILOSOPHER_LIBRARY["socrates"]["name"]
     st.session_state["agent2_philosopher_name"] = PHILOSOPHER_LIBRARY["nietzsche"]["name"]
     _default_model = list(MODEL_OPTIONS.keys())[0]
@@ -85,29 +97,49 @@ def reset_game() -> None:
     st.session_state.setdefault("judge2_model_label",  _default_model)
     st.session_state.setdefault("judge3_model_label",  _default_model)
     st.session_state.setdefault("num_judges", 1)
+    st.session_state["agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
+    st.session_state["developer_mode"] = False
 
     st.session_state["_pref_summary"] = False  # reset to default on new game
+    st.session_state["_pref_agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
+    st.session_state["_pref_developer_mode"] = False
 
     for key in [
         "transcript", "judgment", "judge_results", "summary", "topic", "agent_configs",
+        "token_usage",
         *_DEBATE_PARAM_KEYS,
     ]:
         st.session_state.pop(key, None)
 
 
-def _save_debate_params() -> None:
+def _save_debate_params(agent1_name: str | None = None, agent2_name: str | None = None) -> None:
     """Copy live widget values to stable keys before a stage transition.
 
     Widget-bound keys are disowned by Streamlit when their widget isn't rendered,
     so we snapshot them here while they are guaranteed to be current.
     """
     default_m = list(MODEL_OPTIONS.keys())[0]
-    st.session_state["_dp_phil1"]       = st.session_state.get("agent1_philosopher_name")
-    st.session_state["_dp_phil2"]       = st.session_state.get("agent2_philosopher_name")
+    resolved_agent1_name = agent1_name or st.session_state.get("ui_agent1_philosopher_name") or st.session_state.get("agent1_philosopher_name")
+    resolved_agent2_name = agent2_name or st.session_state.get("ui_agent2_philosopher_name") or st.session_state.get("agent2_philosopher_name")
+
+    st.session_state["_dp_phil1"]       = _valid_philosopher_name(resolved_agent1_name, "socrates")
+    st.session_state["_dp_phil2"]       = _valid_philosopher_name(resolved_agent2_name, "nietzsche")
+    st.session_state["_dp_agent_configs"] = _agent_configs_from_names(
+        st.session_state["_dp_phil1"],
+        st.session_state["_dp_phil2"],
+    )
     st.session_state["_dp_model1"]      = st.session_state.get("agent1_model_label", default_m)
     st.session_state["_dp_model2"]      = st.session_state.get("agent2_model_label", default_m)
     st.session_state["_dp_strat1"]      = st.session_state.get("player1_strategy", STRATEGY_OPTIONS[0])
     st.session_state["_dp_strat2"]      = st.session_state.get("player2_strategy", STRATEGY_OPTIONS[0])
+    st.session_state["_dp_agent_max_words"] = _valid_agent_max_words(
+        st.session_state.get("_pref_agent_max_words")
+        or st.session_state.get("agent_max_words")
+    )
+    st.session_state["_dp_developer_mode"] = bool(
+        st.session_state.get("_pref_developer_mode")
+        or st.session_state.get("developer_mode", False)
+    )
     num_j = st.session_state.get("num_judges", 1)
     st.session_state["_dp_num_judges"]  = num_j
     for i in range(3):
@@ -126,10 +158,16 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("player1_strategy", STRATEGY_OPTIONS[0])
     st.session_state.setdefault("player2_strategy", STRATEGY_OPTIONS[0])
     st.session_state.setdefault(
-        "agent1_philosopher_name", PHILOSOPHER_LIBRARY["socrates"]["name"]
+        "ui_agent1_philosopher_name", PHILOSOPHER_LIBRARY["socrates"]["name"]
     )
     st.session_state.setdefault(
-        "agent2_philosopher_name", PHILOSOPHER_LIBRARY["nietzsche"]["name"]
+        "ui_agent2_philosopher_name", PHILOSOPHER_LIBRARY["nietzsche"]["name"]
+    )
+    st.session_state.setdefault(
+        "agent1_philosopher_name", st.session_state["ui_agent1_philosopher_name"]
+    )
+    st.session_state.setdefault(
+        "agent2_philosopher_name", st.session_state["ui_agent2_philosopher_name"]
     )
     _default_model = list(MODEL_OPTIONS.keys())[0]
     st.session_state.setdefault("agent1_model_label",  _default_model)
@@ -139,23 +177,95 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("judge3_model_label",  _default_model)
     st.session_state.setdefault("num_judges", 1)
     st.session_state.setdefault("include_summary", False)
+    st.session_state.setdefault("agent_max_words", DEFAULT_AGENT_MAX_WORDS)
+    st.session_state.setdefault("developer_mode", False)
     st.session_state.setdefault("_pref_summary", False)
+    st.session_state.setdefault("_pref_agent_max_words", DEFAULT_AGENT_MAX_WORDS)
+    st.session_state.setdefault("_pref_developer_mode", False)
 
 
-def current_agent_configs():
+# Helper function to validate philosopher names
+def _valid_philosopher_name(value: str | None, fallback_key: str) -> str:
+    valid_names = {v["name"] for v in PHILOSOPHER_LIBRARY.values()}
+    fallback_name = PHILOSOPHER_LIBRARY[fallback_key]["name"]
+
+    if value in valid_names:
+        return value
+
+    return fallback_name
+
+
+def _valid_agent_max_words(value: int | str | None) -> int:
+    try:
+        words = int(value)
+    except (TypeError, ValueError):
+        words = DEFAULT_AGENT_MAX_WORDS
+
+    return max(MIN_AGENT_MAX_WORDS, min(MAX_AGENT_MAX_WORDS, words))
+
+
+def _agent_configs_from_names(agent1_name: str | None, agent2_name: str | None):
     philosopher_options = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
+
+    agent1_name = _valid_philosopher_name(agent1_name, "socrates")
+    agent2_name = _valid_philosopher_name(agent2_name, "nietzsche")
+
     return [
         {
-            "philosopher_key": philosopher_options[
-                st.session_state["agent1_philosopher_name"]
-            ]
+            "philosopher_key": philosopher_options[agent1_name],
+            "philosopher_name": agent1_name,
         },
         {
-            "philosopher_key": philosopher_options[
-                st.session_state["agent2_philosopher_name"]
-            ]
+            "philosopher_key": philosopher_options[agent2_name],
+            "philosopher_name": agent2_name,
         },
     ]
+
+
+def _seed_character_stage_widgets() -> None:
+    if st.session_state.get("_character_stage_seeded"):
+        return
+
+    st.session_state["ui_agent1_philosopher_name"] = _valid_philosopher_name(
+        st.session_state.get("agent1_philosopher_name")
+        or st.session_state.get("ui_agent1_philosopher_name"),
+        "socrates",
+    )
+    st.session_state["ui_agent2_philosopher_name"] = _valid_philosopher_name(
+        st.session_state.get("agent2_philosopher_name")
+        or st.session_state.get("ui_agent2_philosopher_name"),
+        "nietzsche",
+    )
+    st.session_state["_character_stage_seeded"] = True
+
+
+def _clear_stale_stage_tail(slots: int = 30) -> None:
+    for _ in range(slots):
+        st.empty()
+
+
+def current_agent_configs(use_saved_params: bool = False):
+    if use_saved_params:
+        saved_configs = st.session_state.get("_dp_agent_configs")
+        if isinstance(saved_configs, list) and len(saved_configs) >= 2:
+            return saved_configs[:2]
+
+    if use_saved_params:
+        raw_agent1_name = (
+            st.session_state.get("_dp_phil1")
+            or st.session_state.get("agent1_philosopher_name")
+            or st.session_state.get("ui_agent1_philosopher_name")
+        )
+        raw_agent2_name = (
+            st.session_state.get("_dp_phil2")
+            or st.session_state.get("agent2_philosopher_name")
+            or st.session_state.get("ui_agent2_philosopher_name")
+        )
+    else:
+        raw_agent1_name = st.session_state.get("ui_agent1_philosopher_name") or st.session_state.get("agent1_philosopher_name")
+        raw_agent2_name = st.session_state.get("ui_agent2_philosopher_name") or st.session_state.get("agent2_philosopher_name")
+
+    return _agent_configs_from_names(raw_agent1_name, raw_agent2_name)
 
 
 def render_header() -> None:
@@ -222,6 +332,16 @@ def render_character_cards() -> None:
         render_fighter_card(configs[1]["philosopher_key"], "Player 2 • Against")
 
 
+def render_character_cards_from_names(agent1_name: str, agent2_name: str) -> None:
+    configs = _agent_configs_from_names(agent1_name, agent2_name)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        render_fighter_card(configs[0]["philosopher_key"], "Player 1 • For")
+    with col2:
+        render_fighter_card(configs[1]["philosopher_key"], "Player 2 • Against")
+
+
 def _build_scores_html(scores: dict) -> str:
     """Return score cards as an HTML string (safe to inline in a single st.markdown call).
 
@@ -259,6 +379,72 @@ def render_scores(scores: Dict[str, Dict[str, int]]) -> None:
     st.markdown(_build_scores_html(scores), unsafe_allow_html=True)
 
 
+def _build_token_usage_html(entries: list[dict]) -> str:
+    import html as _html
+
+    if not entries:
+        return (
+            '<div class="score-card">'
+            '<div style="color:#aaa; font-size:0.9rem;">'
+            'No token usage metadata was returned by the selected backend.'
+            '</div>'
+            '</div>'
+        )
+
+    total_prompt = sum(int(entry.get("prompt_tokens", 0)) for entry in entries)
+    total_completion = sum(int(entry.get("completion_tokens", 0)) for entry in entries)
+    total = sum(int(entry.get("total_tokens", 0)) for entry in entries)
+
+    rows = "".join(
+        "<tr>"
+        f"<td>{_html.escape(str(entry.get('call', 'Model call')))}</td>"
+        f"<td>{_html.escape(str(entry.get('model', '')))}</td>"
+        f"<td>{int(entry.get('prompt_tokens', 0))}</td>"
+        f"<td>{int(entry.get('completion_tokens', 0))}</td>"
+        f"<td>{int(entry.get('total_tokens', 0))}</td>"
+        "</tr>"
+        for entry in entries
+    )
+
+    return f"""
+        <div class="score-card">
+            <div class="score-grid" style="margin-bottom:12px;">
+                <div>Prompt: {total_prompt}</div>
+                <div>Completion: {total_completion}</div>
+                <div>Total: {total}</div>
+                <div>Calls: {len(entries)}</div>
+            </div>
+            <table style="width:100%; border-collapse:collapse; color:#e8ecff; font-size:0.82rem;">
+                <thead>
+                    <tr style="color:#8ecbff; text-align:left;">
+                        <th style="padding:6px 4px;">Call</th>
+                        <th style="padding:6px 4px;">Model</th>
+                        <th style="padding:6px 4px;">Prompt</th>
+                        <th style="padding:6px 4px;">Completion</th>
+                        <th style="padding:6px 4px;">Total</th>
+                    </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>
+        </div>
+    """
+
+
+def render_development_panel() -> None:
+    if not st.session_state.get("_pref_developer_mode", False):
+        return
+
+    st.markdown(
+        f"""
+        <div class="arcade-panel" style="margin-top:8px; margin-bottom:18px;">
+            <div class="topic-label">Development</div>
+            {_build_token_usage_html(st.session_state.get("token_usage", []))}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_start_screen() -> None:
     st.markdown(
         """
@@ -273,16 +459,36 @@ def render_start_screen() -> None:
 
     st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
 
-    st.checkbox(
-        "Include written summary",
-        key="include_summary",
-        help="Generate a written debate summary after the arena stage (costs extra tokens). Off by default.",
-    )
+    with st.expander("Settings", expanded=False):
+        setting_col1, setting_col2 = st.columns([1, 2])
+        with setting_col1:
+            st.checkbox(
+                "Include written summary",
+                key="include_summary",
+                help="Generate a written debate summary after the arena stage.",
+            )
+            st.checkbox(
+                "Developer mode",
+                key="developer_mode",
+                help="Show development diagnostics such as token usage after a run.",
+            )
+        with setting_col2:
+            st.slider(
+                "Max philosopher words",
+                min_value=MIN_AGENT_MAX_WORDS,
+                max_value=MAX_AGENT_MAX_WORDS,
+                step=10,
+                key="agent_max_words",
+            )
 
     if st.button("Start Game", type="primary", use_container_width=True):
         # Save to a stable key before transitioning — the widget key will be
         # disowned once stage 0 is no longer rendered.
         st.session_state["_pref_summary"] = st.session_state.get("include_summary", False)
+        st.session_state["_pref_agent_max_words"] = _valid_agent_max_words(
+            st.session_state.get("agent_max_words")
+        )
+        st.session_state["_pref_developer_mode"] = st.session_state.get("developer_mode", False)
         st.session_state["stage"] = 1
         st.rerun()
 
@@ -297,6 +503,7 @@ def render_topic_stage() -> None:
             st.rerun()
     with col2:
         if st.button("Continue", type="primary", use_container_width=True):
+            st.session_state["_character_stage_seeded"] = False
             st.session_state["stage"] = 2
             st.rerun()
 
@@ -310,20 +517,26 @@ def render_character_stage() -> None:
 
     # ── Philosophers ──────────────────────────────────────────────────────────
     philosopher_names = [v["name"] for v in PHILOSOPHER_LIBRARY.values()]
+    _seed_character_stage_widgets()
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.selectbox(
+        agent1_name = st.selectbox(
             "Player 1 Philosopher",
             options=philosopher_names,
-            key="agent1_philosopher_name",
+            key="ui_agent1_philosopher_name",
         )
     with col_b:
-        st.selectbox(
+        agent2_name = st.selectbox(
             "Player 2 Philosopher",
             options=philosopher_names,
-            key="agent2_philosopher_name",
+            key="ui_agent2_philosopher_name",
         )
+
+    # Keep non-widget display keys synchronized with the current selectbox values.
+    # These keys are not bound to widgets, so they can safely be updated here.
+    st.session_state["agent1_philosopher_name"] = agent1_name
+    st.session_state["agent2_philosopher_name"] = agent2_name
 
     # ── Strategies ────────────────────────────────────────────────────────────
     strategy_col1, strategy_col2 = st.columns(2)
@@ -332,7 +545,15 @@ def render_character_stage() -> None:
     with strategy_col2:
         st.selectbox("Player 2 Strategy", options=STRATEGY_OPTIONS, key="player2_strategy")
 
-    render_character_cards()
+    philosopher_options = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
+    agent1_key = philosopher_options[_valid_philosopher_name(agent1_name, "socrates")]
+    agent2_key = philosopher_options[_valid_philosopher_name(agent2_name, "nietzsche")]
+
+    card_col1, card_col2 = st.columns(2)
+    with card_col1:
+        render_fighter_card(agent1_key, "Player 1 • For")
+    with card_col2:
+        render_fighter_card(agent2_key, "Player 2 • Against")
 
     # ── Debater models ────────────────────────────────────────────────────────
     st.markdown("**Debater Models**")
@@ -381,11 +602,11 @@ def render_character_stage() -> None:
     judge_roles = JUDGE_ROLE_LABELS[num_judges]
     rows = (
         f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-        f'<span style="color:#e8ecff;">{st.session_state["agent1_philosopher_name"]} <span style="color:#aaa;font-size:0.8rem;">(For)</span></span>'
+        f'<span style="color:#e8ecff;">{agent1_name} <span style="color:#aaa;font-size:0.8rem;">(For)</span></span>'
         f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent1_model_label"]}</span>'
         f'</div>'
         f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-        f'<span style="color:#e8ecff;">{st.session_state["agent2_philosopher_name"]} <span style="color:#aaa;font-size:0.8rem;">(Against)</span></span>'
+        f'<span style="color:#e8ecff;">{agent2_name} <span style="color:#aaa;font-size:0.8rem;">(Against)</span></span>'
         f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent2_model_label"]}</span>'
         f'</div>'
     )
@@ -418,29 +639,16 @@ def render_character_stage() -> None:
             # Snapshot all widget values to stable keys NOW, while they are live.
             # Going to stage 3 will cause Streamlit to disown these widget-bound keys,
             # but the _dp_ snapshot keys are unaffected by setdefault.
-            _save_debate_params()
+            _save_debate_params(agent1_name, agent2_name)
             st.session_state["stage"] = 3
             st.rerun()
 
 
 def render_versus_stage() -> None:
-    configs = current_agent_configs()
+    configs = current_agent_configs(use_saved_params=True)
+    st.session_state["agent1_philosopher_name"] = configs[0]["philosopher_name"]
+    st.session_state["agent2_philosopher_name"] = configs[1]["philosopher_name"]
     render_topic_panel(st.session_state["selected_topic"])
-
-    col1, col2, col3 = st.columns([2, 1, 2])
-    with col1:
-        render_fighter_card(configs[0]["philosopher_key"], "Player 1 • For")
-    with col2:
-        st.markdown(
-            """
-            <div style="display:flex; align-items:center; justify-content:center; height:100%;">
-                <div class="arcade-vs">VS</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with col3:
-        render_fighter_card(configs[1]["philosopher_key"], "Player 2 • Against")
 
     st.markdown(
         """
@@ -458,39 +666,56 @@ def render_versus_stage() -> None:
     )
 
     if "transcript" not in st.session_state:
+        if not st.session_state.get("_loading_screen_primed", False):
+            st.session_state["_loading_screen_primed"] = True
+            st.rerun()
+        _clear_stale_stage_tail()
         with st.spinner("Running debate — this may take a minute…"):
             handle_run_debate()
+    st.session_state.pop("_loading_screen_primed", None)
     st.session_state["stage"] = 4
     st.rerun()
 
 
 def handle_run_debate() -> None:
-    philosopher_options = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
     default_m = list(MODEL_OPTIONS.keys())[0]
 
-    # Prefer the stable _dp_ snapshot keys; fall back to widget keys if not set
-    # (e.g. when called directly from render_arena_stage's safety net).
-    agent1_name        = st.session_state.get("_dp_phil1")  or st.session_state.get("agent1_philosopher_name", PHILOSOPHER_LIBRARY["socrates"]["name"])
-    agent2_name        = st.session_state.get("_dp_phil2")  or st.session_state.get("agent2_philosopher_name", PHILOSOPHER_LIBRARY["nietzsche"]["name"])
+    # Prefer the stable _dp_ snapshot keys; fall back to display/widget keys if
+    # called directly from render_arena_stage's safety net.
+    saved_configs      = current_agent_configs(use_saved_params=True)
+    agent1_name        = saved_configs[0]["philosopher_name"]
+    agent2_name        = saved_configs[1]["philosopher_name"]
     agent1_model_label = st.session_state.get("_dp_model1") or st.session_state.get("agent1_model_label", default_m)
     agent2_model_label = st.session_state.get("_dp_model2") or st.session_state.get("agent2_model_label", default_m)
     p1_strategy        = st.session_state.get("_dp_strat1") or st.session_state.get("player1_strategy", STRATEGY_OPTIONS[0])
     p2_strategy        = st.session_state.get("_dp_strat2") or st.session_state.get("player2_strategy", STRATEGY_OPTIONS[0])
     num_judges         = st.session_state.get("_dp_num_judges") or st.session_state.get("num_judges", 1)
+    agent_max_words    = _valid_agent_max_words(
+        st.session_state.get("_dp_agent_max_words")
+        or st.session_state.get("_pref_agent_max_words")
+        or st.session_state.get("agent_max_words")
+    )
+    developer_mode     = bool(
+        st.session_state.get("_dp_developer_mode")
+        or st.session_state.get("_pref_developer_mode")
+        or st.session_state.get("developer_mode", False)
+    )
 
     agent1_provider, agent1_model = MODEL_OPTIONS[agent1_model_label]
     agent2_provider, agent2_model = MODEL_OPTIONS[agent2_model_label]
 
     agent_configs = [
         {
-            "philosopher_key": philosopher_options[agent1_name],
+            "philosopher_key": saved_configs[0]["philosopher_key"],
+            "philosopher_name": agent1_name,
             "provider":    agent1_provider,
             "model":       agent1_model,
             "model_label": agent1_model_label,
             "display_name": f"{agent1_name} (For)",
         },
         {
-            "philosopher_key": philosopher_options[agent2_name],
+            "philosopher_key": saved_configs[1]["philosopher_key"],
+            "philosopher_name": agent2_name,
             "provider":    agent2_provider,
             "model":       agent2_model,
             "model_label": agent2_model_label,
@@ -498,11 +723,13 @@ def handle_run_debate() -> None:
         },
     ]
 
+    reset_token_usage()
     transcript = run_debate(
         st.session_state["selected_topic"],
         st.session_state["rounds"],
         [p1_strategy, p2_strategy],
         agent_configs,
+        max_words=agent_max_words,
     )
 
     focuses     = JUDGE_FOCUS[num_judges]
@@ -546,6 +773,7 @@ def handle_run_debate() -> None:
     st.session_state["summary"]       = summary
     st.session_state["topic"]         = st.session_state["selected_topic"]
     st.session_state["agent_configs"] = agent_configs
+    st.session_state["token_usage"]   = get_token_usage()
 
     # Write back resolved display values so the arena/summary stages show the right names
     st.session_state["agent1_philosopher_name"] = agent1_name
@@ -553,6 +781,8 @@ def handle_run_debate() -> None:
     st.session_state["agent1_model_label"]      = agent1_model_label
     st.session_state["agent2_model_label"]      = agent2_model_label
     st.session_state["num_judges"]              = num_judges
+    st.session_state["agent_max_words"]         = agent_max_words
+    st.session_state["developer_mode"]          = developer_mode
 
 
 def render_arena_stage() -> None:
@@ -694,17 +924,24 @@ def render_arena_stage() -> None:
                 unsafe_allow_html=True,
             )
 
-    bottom_left, bottom_right = st.columns(2)
+    render_development_panel()
+
+    if st.session_state.get("_pref_summary", False):
+        bottom_left, bottom_right = st.columns(2)
+    else:
+        bottom_left = st.container()
+        bottom_right = None
 
     with bottom_left:
         if st.button("New Debate", use_container_width=True):
             reset_game()
             st.rerun()
 
-    with bottom_right:
-        if st.button("Continue to Summary", type="primary", use_container_width=True):
-            st.session_state["stage"] = 5
-            st.rerun()
+    if bottom_right is not None:
+        with bottom_right:
+            if st.button("Continue to Summary", type="primary", use_container_width=True):
+                st.session_state["stage"] = 5
+                st.rerun()
 
 
 def render_summary_stage() -> None:
@@ -772,6 +1009,8 @@ def render_summary_stage() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+
+    render_development_panel()
 
     # ── Navigation ────────────────────────────────────────────────────────────
     bottom_left, bottom_right = st.columns(2)

@@ -303,6 +303,7 @@ def run_debate(
     rounds: int,
     player_strategies: List[str],
     agent_configs: List[Dict[str, str]],
+    max_words: int = 120,
 ) -> List[Dict[str, str]]:
     transcript: List[Dict[str, str]] = []
     agents = build_agents(agent_configs)
@@ -313,7 +314,7 @@ def run_debate(
             transcript.append(
                 {
                     "speaker": agent.name,
-                    "text": agent.respond(topic, transcript, r, strategy),
+                    "text": agent.respond(topic, transcript, r, strategy, max_words=max_words),
                 }
             )
 
