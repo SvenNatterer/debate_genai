@@ -118,7 +118,7 @@ def reset_game() -> None:
 
     for key in [
         "transcript", "judgment", "judge_results", "summary", "topic", "agent_configs",
-        "token_usage",
+        "token_usage", "team_traces", "team_mode_active",
         *_DEBATE_PARAM_KEYS,
     ]:
         st.session_state.pop(key, None)
@@ -451,19 +451,137 @@ def _build_token_usage_html(entries: list[dict]) -> str:
     """
 
 
+def _dev_text(value: object, limit: int = 900) -> str:
+    text = str(value or "").strip()
+    if len(text) > limit:
+        text = f"{text[:limit].rstrip()}..."
+    return text
+
+
+def _candidate_score_rows(scores: object) -> list[dict]:
+    if not isinstance(scores, dict) or not scores:
+        return []
+
+    rows = []
+    for candidate_id, metrics in scores.items():
+        if isinstance(metrics, dict):
+            row = {"Candidate": candidate_id}
+            row.update({
+                str(key).replace("_", " ").title(): value
+                for key, value in metrics.items()
+            })
+        else:
+            row = {"Candidate": candidate_id, "Score": metrics}
+        rows.append(row)
+    return rows
+
+
+def render_team_traces_panel(entries: list[dict]) -> None:
+    if not entries:
+        st.caption("No team reasoning traces were captured for this run.")
+        return
+
+    st.markdown("#### Team Reasoning")
+    for entry in entries:
+        trace = entry.get("trace", {})
+        candidates = trace.get("candidates", []) if isinstance(trace, dict) else []
+        selection = trace.get("selection", {}) if isinstance(trace, dict) else {}
+        reviews = trace.get("reviews", []) if isinstance(trace, dict) else []
+        revisions = trace.get("revisions", []) if isinstance(trace, dict) else []
+        selected = selection.get("selected_candidate", "-") if isinstance(selection, dict) else "-"
+        final_score = int(trace.get("final_score", 0) or 0) if isinstance(trace, dict) else 0
+        approved = bool(trace.get("approved", False)) if isinstance(trace, dict) else False
+        calls = trace.get("calls", []) if isinstance(trace, dict) else []
+        status = "approved" if approved else "best effort"
+        title = (
+            f"{entry.get('speaker', 'Agent')} · Round {int(entry.get('round', 0) or 0)} · "
+            f"V3 · {len(calls)} calls · selected {selected} · "
+            f"score {final_score}/10 · {status}"
+        )
+
+        with st.expander(title, expanded=True):
+            st.markdown("**Candidate reasoning**")
+            if candidates:
+                for candidate in candidates:
+                    if not isinstance(candidate, dict):
+                        continue
+                    cid = _dev_text(candidate.get("id", "Candidate"), 60)
+                    angle = _dev_text(candidate.get("angle", ""), 80)
+                    summary = _dev_text(candidate.get("plan_summary", ""), 700)
+                    st.markdown(f"**{cid}** · {angle}")
+                    st.write(summary or "No candidate summary captured.")
+            else:
+                st.caption("No candidate summaries captured.")
+
+            score_rows = _candidate_score_rows(
+                selection.get("candidate_scores", {}) if isinstance(selection, dict) else {}
+            )
+            if score_rows:
+                st.table(score_rows)
+            else:
+                st.caption("No candidate scores captured.")
+
+            st.markdown("**Selection**")
+            st.write(
+                _dev_text(
+                    selection.get("selection_reasoning", "") if isinstance(selection, dict) else "",
+                    900,
+                ) or "No selection summary captured."
+            )
+
+            st.markdown("**Review reasoning**")
+            if reviews:
+                for review in reviews:
+                    if not isinstance(review, dict):
+                        continue
+                    review_status = "approved" if review.get("approved") else "revision requested"
+                    st.markdown(
+                        f"**Review {int(review.get('attempt', 0) or 0)}** · "
+                        f"{int(review.get('score', 0) or 0)}/10 · {review_status}"
+                    )
+                    st.write(f"Critique: {_dev_text(review.get('critique', ''), 700)}")
+                    guidance = _dev_text(review.get("revision_guidance", ""), 700)
+                    if guidance:
+                        st.write(f"Guidance: {guidance}")
+                    reasoning = _dev_text(review.get("reasoning_summary", ""), 700)
+                    if reasoning:
+                        st.write(f"Reasoning: {reasoning}")
+            else:
+                st.caption("No review summaries captured.")
+
+            if revisions:
+                st.markdown("**Revisions**")
+                for revision in revisions:
+                    if not isinstance(revision, dict):
+                        continue
+                    st.markdown(f"**Revision {int(revision.get('attempt', 0) or 0)}**")
+                    st.write(_dev_text(revision.get("plan_summary", ""), 700))
+
+
 def render_development_panel() -> None:
     if not st.session_state.get("_pref_developer_mode", False):
         return
+
+    team_mode = bool(st.session_state.get("team_mode_active", False))
+    team_status = "Enabled" if team_mode else "Disabled"
 
     st.markdown(
         f"""
         <div class="arcade-panel" style="margin-top:8px; margin-bottom:18px;">
             <div class="topic-label">Development</div>
+            <div class="score-card">
+                <div class="score-grid">
+                    <div>Philosopher Teams: {team_status}</div>
+                    <div>Team Internals: Reasoning summaries</div>
+                </div>
+            </div>
             {_build_token_usage_html(st.session_state.get("token_usage", []))}
         </div>
         """,
         unsafe_allow_html=True,
     )
+    if team_mode:
+        render_team_traces_panel(st.session_state.get("team_traces", []))
 
 
 def _html_text(value: object) -> str:
@@ -836,7 +954,7 @@ def render_start_screen() -> None:
             st.checkbox(
                 "Philosopher teams",
                 key="philosopher_teams",
-                help="Use a hidden Strategist/Critic/Speaker team prompt for each philosopher turn.",
+                help="Use V3 hidden candidate strategies, critic scoring, and speaker revision for each philosopher turn.",
             )
         with setting_col2:
             st.slider(
@@ -1143,6 +1261,15 @@ def handle_run_debate() -> None:
         max_words=agent_max_words,
         team_mode=philosopher_teams,
     )
+    team_traces = [
+        {
+            "round": turn.get("round", 0),
+            "speaker": turn.get("speaker", "Agent"),
+            "trace": turn.get("team_trace", {}),
+        }
+        for turn in transcript
+        if turn.get("team_trace")
+    ]
 
     focuses     = JUDGE_FOCUS[num_judges]
     role_labels = JUDGE_ROLE_LABELS[num_judges]
@@ -1186,6 +1313,8 @@ def handle_run_debate() -> None:
     st.session_state["topic"]         = st.session_state["selected_topic"]
     st.session_state["agent_configs"] = agent_configs
     st.session_state["token_usage"]   = get_token_usage()
+    st.session_state["team_traces"]   = team_traces
+    st.session_state["team_mode_active"] = philosopher_teams
     st.session_state["_audio_debate_id"] = int(
         st.session_state.get("_audio_debate_id", 0) or 0
     ) + 1
