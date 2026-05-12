@@ -51,20 +51,10 @@ PHILOSOPHER_LIBRARY = {
 }
 
 AGENT_LIBRARY = {
-    "judge": {
-        "name": "Judge",
-        "goal": "Evaluate arguments on logic, relevance, rebuttal quality, and fairness.",
-        "style": "formal, objective",
-    },
     "summarizer": {
         "name": "Summarizer",
         "goal": "Provide a balanced summary and strongest arguments from each side.",
         "style": "clear, neutral",
-    },
-    "moderator": {
-        "name": "Moderator",
-        "goal": "Keep the debate structured and focused.",
-        "style": "neutral, organized, brief",
     },
 }
 

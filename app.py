@@ -1,5 +1,3 @@
-import os
-
 import streamlit as st
 
 from styles import inject_arcade_css

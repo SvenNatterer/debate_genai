@@ -1,6 +1,6 @@
 # Debate AI / Philosopher Arena
 
-A lightweight multi-agent debate game built around local LLM inference with **Ollama**.  
+A lightweight multi-agent debate game built around local **Ollama** inference or configured **Azure/OpenAI-compatible** model deployments.  
 Two agents argue **for** and **against** a given topic, a **Judge** scores the debate, and a **Summarizer** produces a balanced wrap-up.
 
 ## Project overview
@@ -14,7 +14,7 @@ The core idea is:
 - evaluate the result with a judge agent
 - generate a concise summary
 
-The current backend is structured so that it can run with **Ollama only**, while still providing fallback behavior when Ollama is not reachable.
+The current backend is structured around `debate_engine_cloud.py`, which routes each model call to either local Ollama or a configured platform model.
 
 ---
 
@@ -37,24 +37,19 @@ In short: `app.py` is the interface layer that calls the backend logic.
 
 ---
 
-### `debate_engine.py`
+### `debate_engine_cloud.py`
 Core backend logic for the debate system.
 
 This file currently contains:
 
-- **Ollama connectivity checks**
-  - `can_reach_ollama(...)`
-  - `get_ollama_status(...)`
-
 - **Model configuration**
   - `get_client_and_model()`
 
-- **Fallback / mock behavior**
-  - `mock_response(...)`
-  - `fallback_or_status_message(...)`
-
 - **LLM request handling**
   - `chat_completion(...)`
+  - local Ollama routing
+  - Azure/OpenAI-compatible routing
+  - token usage recording for developer mode
 
 - **Strategy mapping**
   - `strategy_to_instructions(...)`
@@ -76,15 +71,15 @@ This file currently contains:
   - `summarize_debate(...)`
 
 #### Main purpose
-`debate_engine.py` is the orchestration layer for the whole debate pipeline.  
-It builds agents, formats prompts, sends them to Ollama, collects responses, scores the debate, and creates a final summary.
+`debate_engine_cloud.py` is the orchestration layer for the whole debate pipeline.  
+It builds agents, formats prompts, routes model calls, collects responses, scores the debate, records token usage when available, and creates a final summary.
 
 ---
 
 ### `config.py`
 Central configuration file for reusable constants and project-wide settings.
 
-Based on the imports in `debate_engine.py`, this file is expected to define:
+Based on the imports in `debate_engine_cloud.py`, this file is expected to define:
 
 - `SYSTEM_PROMPT`
 - `AGENT_LIBRARY`
@@ -97,10 +92,7 @@ Based on the imports in `debate_engine.py`, this file is expected to define:
 - Keeps all agents concise, structured, and on-topic
 
 **`AGENT_LIBRARY`**
-- Stores metadata for special roles such as:
-  - Judge
-  - Summarizer
-  - optionally Pro / Contra templates
+- Stores metadata for the optional summarizer role.
 
 **`PHILOSOPHER_LIBRARY`**
 - Stores philosopher-specific metadata, for example:
@@ -113,20 +105,11 @@ This file acts as the project's central registry for personas and role definitio
 
 ---
 
-### `requirements.txt`
-Lists Python dependencies required to run the project.
-
-Typical dependencies may include:
-
-- `streamlit`
-- `requests` or standard-library networking alternatives
-- optionally `openai` if older versions supported OpenAI-compatible APIs
-- any UI helper libraries you added
-
-Install with:
+### Dependencies
+The app uses Streamlit for the UI and `python-dotenv` for local environment loading.
 
 ```bash
-pip install -r requirements.txt
+pip install streamlit python-dotenv
 ```
 
 ---
@@ -138,7 +121,6 @@ Typical variables:
 
 ```env
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:1b
 ```
 
 If you use Streamlit locally, this can help keep your configuration clean and separate from source code.
@@ -222,7 +204,6 @@ ollama pull llama3.2:1b
 If no environment variables are set, the backend falls back to:
 
 - `OLLAMA_BASE_URL=http://localhost:11434`
-- `OLLAMA_MODEL=llama3.2:1b`
 
 ---
 
@@ -231,7 +212,7 @@ If no environment variables are set, the backend falls back to:
 ### 1. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install streamlit python-dotenv
 ```
 
 ### 2. Start Ollama
@@ -248,19 +229,13 @@ streamlit run app.py
 
 ---
 
-## Important functions in `debate_engine.py`
+## Important functions in `debate_engine_cloud.py`
 
-### `get_ollama_status(base_url, model)`
-Checks whether:
+### `get_client_and_model()`
+Checks whether the configured platform backend is available for the UI status bar.
 
-- Ollama is reachable
-- the `/api/tags` endpoint responds correctly
-- the required model is installed
-
-This is the main health check before any debate starts.
-
-### `chat_completion(system_prompt, user_prompt)`
-Sends a chat request to Ollama via `/api/chat`.
+### `chat_completion(system_prompt, user_prompt, *, provider, model)`
+Routes a chat request to either local Ollama or the configured platform endpoint.
 
 It returns:
 
@@ -298,7 +273,7 @@ Creates the end-of-debate summary based on topic, transcript, and judgment.
 
 The backend includes several fallback layers.
 
-### If Ollama is not reachable
+### If a backend is not reachable
 The system returns a readable status message instead of crashing.
 
 ### If the requested model is missing
@@ -343,10 +318,6 @@ Example structure for `AGENT_LIBRARY`:
 
 ```python
 AGENT_LIBRARY = {
-    "judge": {
-        "goal": "Evaluate which side argued more clearly, fairly, and consistently.",
-        "style": "neutral, structured, analytical",
-    },
     "summarizer": {
         "goal": "Summarize the debate in a balanced way.",
         "style": "clear, balanced, concise",
@@ -406,8 +377,7 @@ Possible reasons:
 This project separates the debate system into:
 
 - **UI layer** → `app.py`
-- **logic/orchestration layer** → `debate_engine.py`
+- **logic/orchestration layer** → `debate_engine_cloud.py`
 - **configuration/persona layer** → `config.py`
 
 That structure makes it easier to extend the game with new philosophers, strategies, stages, and evaluation logic.
-

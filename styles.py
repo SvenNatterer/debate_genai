@@ -21,14 +21,6 @@ def inject_arcade_css() -> None:
             color: white;
         }
 
-        .fighter-image {
-            width: 100%;
-            height: 260px;
-            object-fit: cover;
-            border-radius: 16px;
-            margin-bottom: 12px;
-        }
-
         .block-container {
             max-width: 1200px;
             padding-top: 1.5rem;
@@ -109,16 +101,6 @@ def inject_arcade_css() -> None:
 
         .blink {
             animation: blink 1s steps(2, start) infinite;
-        }
-
-        .arcade-vs {
-            text-align: center;
-            font-size: 5rem;
-            font-weight: 900;
-            color: #ffd54a;
-            text-shadow: 0 0 12px rgba(255,213,74,0.45);
-            animation: pulse 1s infinite;
-            margin-top: 80px;
         }
 
         .fighter-card {
@@ -205,12 +187,6 @@ def inject_arcade_css() -> None:
             font-size: 0.9rem;
             letter-spacing: 1.2px;
             text-transform: uppercase;
-        }
-
-        @keyframes pulse {
-            0% { transform: scale(1); opacity: 0.9; }
-            50% { transform: scale(1.08); opacity: 1; }
-            100% { transform: scale(1); opacity: 0.9; }
         }
 
         @keyframes blink {

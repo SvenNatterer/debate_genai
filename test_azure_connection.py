@@ -22,7 +22,6 @@ import os
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 # ── Load .env ────────────────────────────────────────────────────────────────
 try:
@@ -38,7 +37,7 @@ API_KEY     = os.getenv("CUSTOM_API_KEY", "")
 API_VERSION = os.getenv("AZURE_API_VERSION", "2024-12-01-preview")
 
 # Models you want to test — must match deployment names exactly on Azure
-MODELS_TO_TEST = [   
+MODELS_TO_TEST = [
     "gpt-5-chat",
     "gpt-4.1-mini",
     "DeepSeek-V3.2",
@@ -46,7 +45,7 @@ MODELS_TO_TEST = [
     "mistral-small-2503",
     "Llama-4-Maverick-17B-128E-Instruct-FP8",
     "Llama-3.3-70B-Instruct",
-    "Phi-4-mini-reasoning", 
+    "Phi-4-mini-reasoning",
 ]
 
 SEPARATOR = "─" * 60

@@ -1,9 +1,9 @@
-import json
-import time
-from typing import Dict
 import base64
+import html
+import json
 from pathlib import Path
 import streamlit as st
+import streamlit.components.v1 as components
 
 from config import PHILOSOPHER_LIBRARY, STRATEGY_OPTIONS, random_topic
 from debate_engine_cloud import (
@@ -62,6 +62,9 @@ MODEL_OPTIONS = {
 DEFAULT_AGENT_MAX_WORDS = 120
 MIN_AGENT_MAX_WORDS = 40
 MAX_AGENT_MAX_WORDS = 300
+DEFAULT_ARGUMENT_ROUNDS = 2
+MIN_ARGUMENT_ROUNDS = 1
+MAX_ARGUMENT_ROUNDS = 5
 
 
 def image_to_data_uri(image_path: str) -> str:
@@ -73,8 +76,10 @@ _DEBATE_PARAM_KEYS = [
     "_dp_phil1", "_dp_phil2", "_dp_model1", "_dp_model2",
     "_dp_strat1", "_dp_strat2", "_dp_num_judges",
     "_dp_judge1_model", "_dp_judge2_model", "_dp_judge3_model",
-    "_dp_agent_configs", "_dp_agent_max_words",
-    "_dp_developer_mode",
+    "_dp_agent_configs", "_dp_agent_max_words", "_dp_rounds",
+    "_dp_developer_mode", "_dp_audio_output", "_dp_audio_autoplay",
+    "_dp_philosopher_teams",
+    "_audio_debate_id", "_audio_autoplay_seen_id",
     "_character_stage_seeded",
     "_loading_screen_primed",
 ]
@@ -83,7 +88,7 @@ _DEBATE_PARAM_KEYS = [
 def reset_game() -> None:
     st.session_state["stage"] = 0
     st.session_state["selected_topic"] = random_topic()
-    st.session_state["rounds"] = 2
+    st.session_state["rounds"] = DEFAULT_ARGUMENT_ROUNDS
     st.session_state["player1_strategy"] = STRATEGY_OPTIONS[0]
     st.session_state["player2_strategy"] = STRATEGY_OPTIONS[0]
     st.session_state["ui_agent1_philosopher_name"] = PHILOSOPHER_LIBRARY["socrates"]["name"]
@@ -99,10 +104,17 @@ def reset_game() -> None:
     st.session_state.setdefault("num_judges", 1)
     st.session_state["agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
     st.session_state["developer_mode"] = False
+    st.session_state["audio_output"] = False
+    st.session_state["audio_autoplay"] = False
+    st.session_state["philosopher_teams"] = False
 
     st.session_state["_pref_summary"] = False  # reset to default on new game
     st.session_state["_pref_agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
+    st.session_state["_pref_rounds"] = DEFAULT_ARGUMENT_ROUNDS
     st.session_state["_pref_developer_mode"] = False
+    st.session_state["_pref_audio_output"] = False
+    st.session_state["_pref_audio_autoplay"] = False
+    st.session_state["_pref_philosopher_teams"] = False
 
     for key in [
         "transcript", "judgment", "judge_results", "summary", "topic", "agent_configs",
@@ -136,9 +148,25 @@ def _save_debate_params(agent1_name: str | None = None, agent2_name: str | None 
         st.session_state.get("_pref_agent_max_words")
         or st.session_state.get("agent_max_words")
     )
+    st.session_state["_dp_rounds"] = _valid_argument_rounds(
+        st.session_state.get("_pref_rounds")
+        or st.session_state.get("rounds")
+    )
     st.session_state["_dp_developer_mode"] = bool(
         st.session_state.get("_pref_developer_mode")
         or st.session_state.get("developer_mode", False)
+    )
+    st.session_state["_dp_audio_output"] = bool(
+        st.session_state.get("_pref_audio_output")
+        or st.session_state.get("audio_output", False)
+    )
+    st.session_state["_dp_audio_autoplay"] = bool(
+        st.session_state.get("_pref_audio_autoplay")
+        or st.session_state.get("audio_autoplay", False)
+    )
+    st.session_state["_dp_philosopher_teams"] = bool(
+        st.session_state.get("_pref_philosopher_teams")
+        or st.session_state.get("philosopher_teams", False)
     )
     num_j = st.session_state.get("num_judges", 1)
     st.session_state["_dp_num_judges"]  = num_j
@@ -154,7 +182,7 @@ def ensure_session_state() -> None:
         return
 
     st.session_state.setdefault("selected_topic", random_topic())
-    st.session_state.setdefault("rounds", 2)
+    st.session_state.setdefault("rounds", DEFAULT_ARGUMENT_ROUNDS)
     st.session_state.setdefault("player1_strategy", STRATEGY_OPTIONS[0])
     st.session_state.setdefault("player2_strategy", STRATEGY_OPTIONS[0])
     st.session_state.setdefault(
@@ -179,9 +207,16 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("include_summary", False)
     st.session_state.setdefault("agent_max_words", DEFAULT_AGENT_MAX_WORDS)
     st.session_state.setdefault("developer_mode", False)
+    st.session_state.setdefault("audio_output", False)
+    st.session_state.setdefault("audio_autoplay", False)
+    st.session_state.setdefault("philosopher_teams", False)
     st.session_state.setdefault("_pref_summary", False)
     st.session_state.setdefault("_pref_agent_max_words", DEFAULT_AGENT_MAX_WORDS)
+    st.session_state.setdefault("_pref_rounds", DEFAULT_ARGUMENT_ROUNDS)
     st.session_state.setdefault("_pref_developer_mode", False)
+    st.session_state.setdefault("_pref_audio_output", False)
+    st.session_state.setdefault("_pref_audio_autoplay", False)
+    st.session_state.setdefault("_pref_philosopher_teams", False)
 
 
 # Helper function to validate philosopher names
@@ -202,6 +237,15 @@ def _valid_agent_max_words(value: int | str | None) -> int:
         words = DEFAULT_AGENT_MAX_WORDS
 
     return max(MIN_AGENT_MAX_WORDS, min(MAX_AGENT_MAX_WORDS, words))
+
+
+def _valid_argument_rounds(value: int | str | None) -> int:
+    try:
+        rounds = int(value)
+    except (TypeError, ValueError):
+        rounds = DEFAULT_ARGUMENT_ROUNDS
+
+    return max(MIN_ARGUMENT_ROUNDS, min(MAX_ARGUMENT_ROUNDS, rounds))
 
 
 def _agent_configs_from_names(agent1_name: str | None, agent2_name: str | None):
@@ -323,25 +367,6 @@ def render_fighter_card(philosopher_key: str, side_label: str) -> None:
         unsafe_allow_html=True,
     )
 
-def render_character_cards() -> None:
-    configs = current_agent_configs()
-    col1, col2 = st.columns(2)
-    with col1:
-        render_fighter_card(configs[0]["philosopher_key"], "Player 1 • For")
-    with col2:
-        render_fighter_card(configs[1]["philosopher_key"], "Player 2 • Against")
-
-
-def render_character_cards_from_names(agent1_name: str, agent2_name: str) -> None:
-    configs = _agent_configs_from_names(agent1_name, agent2_name)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        render_fighter_card(configs[0]["philosopher_key"], "Player 1 • For")
-    with col2:
-        render_fighter_card(configs[1]["philosopher_key"], "Player 2 • Against")
-
-
 def _build_scores_html(scores: dict) -> str:
     """Return score cards as an HTML string (safe to inline in a single st.markdown call).
 
@@ -373,10 +398,6 @@ def _build_scores_html(scores: dict) -> str:
             f'</div>'
         )
     return "".join(parts)
-
-
-def render_scores(scores: Dict[str, Dict[str, int]]) -> None:
-    st.markdown(_build_scores_html(scores), unsafe_allow_html=True)
 
 
 def _build_token_usage_html(entries: list[dict]) -> str:
@@ -445,6 +466,341 @@ def render_development_panel() -> None:
     )
 
 
+def _html_text(value: object) -> str:
+    return html.escape(str(value)).replace("\n", "<br>")
+
+
+def _json_for_script(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+
+def _estimate_audio_panel_height(transcript: list[dict]) -> int:
+    if not transcript:
+        return 290
+
+    card_heights = []
+    for turn in transcript:
+        text_length = len(str(turn.get("text", "")))
+        card_heights.append(max(170, min(520, 120 + int(text_length * 0.42))))
+    return min(2200, 180 + sum(card_heights))
+
+
+def render_debate_text_panel(topic: str, transcript: list[dict] | None) -> None:
+    st.markdown(
+        f"""
+        <div class="arcade-panel" style="margin-bottom:18px;">
+            <div class="topic-label">Debate Chat</div>
+            <div class="topic-text">{_html_text(topic)}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if transcript:
+        for turn in transcript:
+            st.markdown(
+                f"""
+                <div class="score-card">
+                    <div class="score-name">{_html_text(turn['speaker'])}</div>
+                    <div style="color:#e8ecff; line-height:1.6;">{_html_text(turn['text'])}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            """
+            <div class="score-card">
+                <div style="color:#e8ecff; line-height:1.6;">Debate is being prepared...</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_debate_audio_panel(
+    topic: str,
+    transcript: list[dict] | None,
+    autoplay: bool = False,
+) -> None:
+    turns = [
+        {
+            "speaker": str(turn.get("speaker", "Speaker")),
+            "text": str(turn.get("text", "")),
+        }
+        for turn in (transcript or [])
+    ]
+
+    if not turns:
+        render_debate_text_panel(topic, transcript)
+        return
+
+    cards_html = "".join(
+        f"""
+        <article class="score-card">
+            <div class="turn-heading">
+                <div class="score-name">{_html_text(turn["speaker"])}</div>
+                <button class="audio-button" type="button" data-turn="{index}"
+                        title="Argument vorlesen" aria-label="Argument vorlesen">
+                    ▶ Play
+                </button>
+            </div>
+            <div class="turn-text">{_html_text(turn["text"])}</div>
+        </article>
+        """
+        for index, turn in enumerate(turns)
+    )
+
+    panel_html = """
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;800;900&display=swap');
+
+            html, body {
+                margin: 0;
+                background: transparent;
+                color: white;
+                font-family: 'Orbitron', sans-serif;
+            }
+
+            .arcade-panel {
+                box-sizing: border-box;
+                background: rgba(255,255,255,0.05);
+                border: 2px solid rgba(255,255,255,0.14);
+                border-radius: 22px;
+                padding: 24px;
+                box-shadow: 0 0 25px rgba(0,0,0,0.35);
+                backdrop-filter: blur(10px);
+            }
+
+            .topic-label {
+                font-size: 0.95rem;
+                text-transform: uppercase;
+                letter-spacing: 3px;
+                opacity: 0.8;
+                margin-bottom: 14px;
+                color: #8ecbff;
+                font-weight: 700;
+            }
+
+            .topic-text {
+                font-size: 1.85rem;
+                font-weight: 800;
+                line-height: 1.35;
+                color: white;
+                margin-bottom: 16px;
+            }
+
+            .audio-toolbar {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-bottom: 16px;
+            }
+
+            .audio-status {
+                color: #cfd8ff;
+                font-size: 0.82rem;
+                opacity: 0.85;
+            }
+
+            .score-card {
+                box-sizing: border-box;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.14);
+                border-radius: 18px;
+                padding: 18px;
+                margin-bottom: 14px;
+            }
+
+            .turn-heading {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                margin-bottom: 10px;
+            }
+
+            .score-name {
+                font-size: 1.1rem;
+                font-weight: 800;
+                color: white;
+            }
+
+            .turn-text {
+                color: #e8ecff;
+                line-height: 1.6;
+                font-size: 1rem;
+            }
+
+            .audio-button {
+                border-radius: 14px;
+                border: 1px solid rgba(255,255,255,0.18);
+                background: linear-gradient(180deg, rgba(48,68,120,0.95), rgba(22,30,58,0.95));
+                color: white;
+                cursor: pointer;
+                font: 800 0.82rem 'Orbitron', sans-serif;
+                min-height: 38px;
+                padding: 0 14px;
+                box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+                white-space: nowrap;
+            }
+
+            .audio-button:hover {
+                border-color: rgba(142,203,255,0.8);
+                box-shadow: 0 0 0 1px rgba(142,203,255,0.25), 0 10px 24px rgba(0,0,0,0.35);
+            }
+
+            .audio-button.stop {
+                background: linear-gradient(180deg, rgba(98,38,58,0.95), rgba(44,18,34,0.95));
+            }
+
+            @media (max-width: 640px) {
+                .arcade-panel {
+                    padding: 18px;
+                }
+
+                .topic-text {
+                    font-size: 1.35rem;
+                }
+
+                .turn-heading {
+                    align-items: flex-start;
+                    flex-direction: column;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <section class="arcade-panel">
+            <div class="topic-label">Debate Chat</div>
+            <div class="topic-text">__TOPIC__</div>
+            <div class="audio-toolbar">
+                <button class="audio-button" type="button" id="play-all" title="Gesamte Debatte vorlesen">
+                    ▶ Play all
+                </button>
+                <button class="audio-button stop" type="button" id="stop-audio" title="Audio stoppen">
+                    Stop
+                </button>
+                <span class="audio-status" id="speech-status">Ready.</span>
+            </div>
+            __CARDS__
+        </section>
+
+        <script>
+            const turns = __TURNS__;
+            const autoPlay = __AUTO_PLAY__;
+            const statusEl = document.getElementById("speech-status");
+
+            function setStatus(message) {
+                statusEl.textContent = message;
+            }
+
+            function getVoice(index) {
+                const voices = window.speechSynthesis.getVoices();
+                if (!voices.length) {
+                    return null;
+                }
+
+                const preferred =
+                    voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("en")) ||
+                    voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("de")) ||
+                    voices[0];
+                const alternate =
+                    voices.find((voice) => voice !== preferred && voice.lang === preferred.lang) ||
+                    preferred;
+
+                return index % 2 === 0 ? preferred : alternate;
+            }
+
+            function speakTurn(index, continueAfter = false) {
+                if (!("speechSynthesis" in window)) {
+                    setStatus("Speech output is not available in this browser.");
+                    return;
+                }
+
+                const turn = turns[index];
+                if (!turn) {
+                    return;
+                }
+
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(`${turn.speaker}. ${turn.text}`);
+                utterance.rate = 0.95;
+                utterance.pitch = index % 2 === 0 ? 1.04 : 0.92;
+
+                const voice = getVoice(index);
+                if (voice) {
+                    utterance.voice = voice;
+                }
+
+                utterance.onstart = () => setStatus(`Reading ${turn.speaker}`);
+                utterance.onerror = () => setStatus("Speech stopped.");
+                utterance.onend = () => {
+                    if (continueAfter && index + 1 < turns.length) {
+                        speakTurn(index + 1, true);
+                    } else {
+                        setStatus("Ready.");
+                    }
+                };
+
+                window.speechSynthesis.speak(utterance);
+            }
+
+            function playAll() {
+                speakTurn(0, true);
+            }
+
+            document.querySelectorAll("[data-turn]").forEach((button) => {
+                button.addEventListener("click", () => {
+                    speakTurn(Number(button.dataset.turn), false);
+                });
+            });
+
+            document.getElementById("play-all").addEventListener("click", playAll);
+            document.getElementById("stop-audio").addEventListener("click", () => {
+                window.speechSynthesis.cancel();
+                setStatus("Stopped.");
+            });
+
+            if ("speechSynthesis" in window && "onvoiceschanged" in window.speechSynthesis) {
+                window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+            }
+
+            if (autoPlay) {
+                window.setTimeout(() => {
+                    try {
+                        playAll();
+                    } catch (error) {
+                        setStatus("Press Play all to start audio.");
+                    }
+                }, 350);
+            }
+        </script>
+    </body>
+    </html>
+    """
+    panel_html = (
+        panel_html
+        .replace("__TOPIC__", _html_text(topic))
+        .replace("__CARDS__", cards_html)
+        .replace("__TURNS__", _json_for_script(turns))
+        .replace("__AUTO_PLAY__", "true" if autoplay else "false")
+    )
+
+    components.html(
+        panel_html,
+        height=_estimate_audio_panel_height(turns),
+        scrolling=True,
+    )
+
+
 def render_start_screen() -> None:
     st.markdown(
         """
@@ -467,10 +823,20 @@ def render_start_screen() -> None:
                 key="include_summary",
                 help="Generate a written debate summary after the arena stage.",
             )
+            audio_enabled = st.checkbox(
+                "Audio output",
+                key="audio_output",
+                help="Show browser speech controls for the debate arguments.",
+            )
             st.checkbox(
                 "Developer mode",
                 key="developer_mode",
                 help="Show development diagnostics such as token usage after a run.",
+            )
+            st.checkbox(
+                "Philosopher teams",
+                key="philosopher_teams",
+                help="Use a hidden Strategist/Critic/Speaker team prompt for each philosopher turn.",
             )
         with setting_col2:
             st.slider(
@@ -480,6 +846,20 @@ def render_start_screen() -> None:
                 step=10,
                 key="agent_max_words",
             )
+            st.slider(
+                "Argument rounds",
+                min_value=MIN_ARGUMENT_ROUNDS,
+                max_value=MAX_ARGUMENT_ROUNDS,
+                step=1,
+                key="rounds",
+                help="Each round gives both philosophers one argument.",
+            )
+            st.checkbox(
+                "Autoplay audio",
+                key="audio_autoplay",
+                disabled=not audio_enabled,
+                help="Try to read the full debate automatically when the arena opens.",
+            )
 
     if st.button("Start Game", type="primary", use_container_width=True):
         # Save to a stable key before transitioning — the widget key will be
@@ -488,7 +868,18 @@ def render_start_screen() -> None:
         st.session_state["_pref_agent_max_words"] = _valid_agent_max_words(
             st.session_state.get("agent_max_words")
         )
+        st.session_state["_pref_rounds"] = _valid_argument_rounds(
+            st.session_state.get("rounds")
+        )
         st.session_state["_pref_developer_mode"] = st.session_state.get("developer_mode", False)
+        st.session_state["_pref_audio_output"] = st.session_state.get("audio_output", False)
+        st.session_state["_pref_audio_autoplay"] = (
+            st.session_state.get("audio_output", False)
+            and st.session_state.get("audio_autoplay", False)
+        )
+        st.session_state["_pref_philosopher_teams"] = st.session_state.get(
+            "philosopher_teams", False
+        )
         st.session_state["stage"] = 1
         st.rerun()
 
@@ -690,6 +1081,11 @@ def handle_run_debate() -> None:
     p1_strategy        = st.session_state.get("_dp_strat1") or st.session_state.get("player1_strategy", STRATEGY_OPTIONS[0])
     p2_strategy        = st.session_state.get("_dp_strat2") or st.session_state.get("player2_strategy", STRATEGY_OPTIONS[0])
     num_judges         = st.session_state.get("_dp_num_judges") or st.session_state.get("num_judges", 1)
+    argument_rounds    = _valid_argument_rounds(
+        st.session_state.get("_dp_rounds")
+        or st.session_state.get("_pref_rounds")
+        or st.session_state.get("rounds")
+    )
     agent_max_words    = _valid_agent_max_words(
         st.session_state.get("_dp_agent_max_words")
         or st.session_state.get("_pref_agent_max_words")
@@ -699,6 +1095,21 @@ def handle_run_debate() -> None:
         st.session_state.get("_dp_developer_mode")
         or st.session_state.get("_pref_developer_mode")
         or st.session_state.get("developer_mode", False)
+    )
+    audio_output       = bool(
+        st.session_state.get("_dp_audio_output")
+        or st.session_state.get("_pref_audio_output")
+        or st.session_state.get("audio_output", False)
+    )
+    audio_autoplay     = audio_output and bool(
+        st.session_state.get("_dp_audio_autoplay")
+        or st.session_state.get("_pref_audio_autoplay")
+        or st.session_state.get("audio_autoplay", False)
+    )
+    philosopher_teams  = bool(
+        st.session_state.get("_dp_philosopher_teams")
+        or st.session_state.get("_pref_philosopher_teams")
+        or st.session_state.get("philosopher_teams", False)
     )
 
     agent1_provider, agent1_model = MODEL_OPTIONS[agent1_model_label]
@@ -726,10 +1137,11 @@ def handle_run_debate() -> None:
     reset_token_usage()
     transcript = run_debate(
         st.session_state["selected_topic"],
-        st.session_state["rounds"],
+        argument_rounds,
         [p1_strategy, p2_strategy],
         agent_configs,
         max_words=agent_max_words,
+        team_mode=philosopher_teams,
     )
 
     focuses     = JUDGE_FOCUS[num_judges]
@@ -774,6 +1186,9 @@ def handle_run_debate() -> None:
     st.session_state["topic"]         = st.session_state["selected_topic"]
     st.session_state["agent_configs"] = agent_configs
     st.session_state["token_usage"]   = get_token_usage()
+    st.session_state["_audio_debate_id"] = int(
+        st.session_state.get("_audio_debate_id", 0) or 0
+    ) + 1
 
     # Write back resolved display values so the arena/summary stages show the right names
     st.session_state["agent1_philosopher_name"] = agent1_name
@@ -781,8 +1196,12 @@ def handle_run_debate() -> None:
     st.session_state["agent1_model_label"]      = agent1_model_label
     st.session_state["agent2_model_label"]      = agent2_model_label
     st.session_state["num_judges"]              = num_judges
+    st.session_state["rounds"]                  = argument_rounds
     st.session_state["agent_max_words"]         = agent_max_words
     st.session_state["developer_mode"]          = developer_mode
+    st.session_state["audio_output"]            = audio_output
+    st.session_state["audio_autoplay"]          = audio_autoplay
+    st.session_state["philosopher_teams"]       = philosopher_teams
 
 
 def render_arena_stage() -> None:
@@ -821,37 +1240,30 @@ def render_arena_stage() -> None:
             unsafe_allow_html=True,
         )
 
-    st.markdown(
-        f"""
-        <div class="arcade-panel" style="margin-bottom:18px;">
-            <div class="topic-label">Debate Chat</div>
-            <div class="topic-text">{topic}</div>
-        """,
-        unsafe_allow_html=True,
+    audio_enabled = bool(
+        st.session_state.get("_dp_audio_output")
+        or st.session_state.get("_pref_audio_output")
+        or st.session_state.get("audio_output", False)
+    )
+    debate_id = st.session_state.get("_audio_debate_id")
+    should_autoplay = (
+        audio_enabled
+        and bool(
+            st.session_state.get("_dp_audio_autoplay")
+            or st.session_state.get("_pref_audio_autoplay")
+            or st.session_state.get("audio_autoplay", False)
+        )
+        and debate_id is not None
+        and st.session_state.get("_audio_autoplay_seen_id") != debate_id
     )
 
-    if transcript:
-        for turn in transcript:
-            st.markdown(
-                f"""
-                <div class="score-card">
-                    <div class="score-name">{turn['speaker']}</div>
-                    <div style="color:#e8ecff; line-height:1.6;">{turn['text']}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown(
-            """
-            <div class="score-card">
-                <div style="color:#e8ecff; line-height:1.6;">Debate is being prepared...</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    if should_autoplay:
+        st.session_state["_audio_autoplay_seen_id"] = debate_id
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    if audio_enabled:
+        render_debate_audio_panel(topic, transcript, autoplay=should_autoplay)
+    else:
+        render_debate_text_panel(topic, transcript)
 
     if judgment:
         num_judges    = st.session_state.get("num_judges", 1)

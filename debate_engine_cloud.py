@@ -20,7 +20,7 @@ Public interface
   get_client_and_model()
   chat_completion(system_prompt, user_prompt, *, provider, model)
   build_agents(agent_configs)
-  run_debate(topic, rounds, strategies, agent_configs)
+  run_debate(topic, rounds, strategies, agent_configs, team_mode)
   judge_debate(topic, transcript, *, judge_provider, judge_model, focus)
   aggregate_judgments(judgments)
   summarize_debate(topic, transcript, judgment, *, judge_provider, judge_model)
@@ -373,6 +373,7 @@ class DebateAgent:
         round_idx: int,
         strategy: str,
         max_words: int = 120,
+        team_mode: bool = False,
     ) -> str:
         history = "\n".join(
             f"{turn['speaker']}: {turn['text']}" for turn in transcript[-8:]
@@ -386,7 +387,44 @@ Philosopher stance: {self.philosopher_stance}
 Debate side: {self.side}
 """
 
-        prompt = f"""
+        if team_mode:
+            prompt = f"""
+Agent: {self.name}
+Goal: {self.goal}
+Style: {self.style}
+{persona_block}
+Argument strategy: {strategy}
+
+Strategy instructions:
+{strategy_to_instructions(strategy)}
+
+Topic:
+{topic}
+
+Round:
+{round_idx}
+
+Recent transcript:
+{history}
+
+Hidden philosopher team protocol:
+- Strategist: privately identify the strongest argument line for your assigned side.
+- Critic: privately identify weaknesses, objections, and risks in that argument.
+- Speaker: write the final public response in {self.name}'s voice.
+
+Instructions:
+- Return only the final Speaker response.
+- Do not mention Strategist, Critic, Speaker, team deliberation, hidden notes, or internal reasoning.
+- Respond as {self.name}.
+- If a philosopher persona is assigned, reflect that philosopher's perspective and tone.
+- Stay consistent with your assigned side.
+- Address the debate topic directly.
+- React to the opponent's most relevant prior point when possible.
+- Keep it under {max_words} words.
+- Avoid bullet points.
+"""
+        else:
+            prompt = f"""
 Agent: {self.name}
 Goal: {self.goal}
 Style: {self.style}
@@ -463,6 +501,7 @@ def run_debate(
     player_strategies: List[str],
     agent_configs: List[Dict[str, str]],
     max_words: int = 120,
+    team_mode: bool = False,
 ) -> List[Dict[str, str]]:
     transcript: List[Dict[str, str]] = []
     agents = build_agents(agent_configs)
@@ -470,7 +509,11 @@ def run_debate(
         for idx, agent in enumerate(agents):
             transcript.append({
                 "speaker": agent.name,
-                "text":    agent.respond(topic, transcript, r, player_strategies[idx], max_words=max_words),
+                "text":    agent.respond(
+                    topic, transcript, r, player_strategies[idx],
+                    max_words=max_words,
+                    team_mode=team_mode,
+                ),
             })
     return transcript
 
@@ -496,8 +539,6 @@ def judge_debate(
     judge_model: str = "",
     focus: str = "",
 ) -> Dict[str, Any]:
-    history = "\n".join(f"{t['speaker']}: {t['text']}" for t in transcript)
-
     focus_block = (
         f"\nSpecialisation:\n{focus}\n"
         f"Score all five metrics, but apply extra scrutiny in your area of focus.\n"
