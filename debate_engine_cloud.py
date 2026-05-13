@@ -32,7 +32,7 @@ import random
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -249,6 +249,54 @@ def _clean_public_response(text: str) -> str:
     return cleaned
 
 
+def _philosopher_aliases(name: str) -> List[str]:
+    if not name:
+        return []
+    aliases = {name}
+    parts = name.split()
+    if parts:
+        aliases.add(parts[-1])
+    if name == "Simone de Beauvoir":
+        aliases.update({"de Beauvoir", "Beauvoir"})
+    return sorted(aliases, key=len, reverse=True)
+
+
+def _remove_opponent_name_address(text: str, own_philosopher: str) -> str:
+    aliases: List[str] = []
+    for philosopher in PHILOSOPHER_LIBRARY.values():
+        name = philosopher["name"]
+        if name != own_philosopher:
+            aliases.extend(_philosopher_aliases(name))
+
+    if not aliases:
+        return text
+
+    pattern = "|".join(re.escape(alias) for alias in sorted(set(aliases), key=len, reverse=True))
+    cleaned = re.sub(
+        rf"^\s*(?:but|however|yet|still|no|yes)?\s*(?:{pattern})(?:\s*\([^)]*\))?\s*[:,;-]\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned or text
+
+
+def _agent_history_label(speaker: str, current_side: str) -> str:
+    if f"({current_side})" in speaker:
+        return "Your side"
+    if "(For)" in speaker or "(Against)" in speaker:
+        return "Opposing side"
+    return "Prior turn"
+
+
+def _format_agent_history(transcript: List[Dict[str, str]], current_side: str) -> str:
+    lines = [
+        f"{_agent_history_label(str(turn.get('speaker', '')), current_side)}: {turn.get('text', '')}"
+        for turn in transcript[-8:]
+    ]
+    return "\n".join(lines) or "No prior turns."
+
+
 def _extract_public_team_response(text: str) -> str:
     """Return only the public speaker text from a team-mode model response."""
     parsed = _parse_json_response(text)
@@ -308,6 +356,24 @@ def _team_review_approved(text: str) -> bool:
         if isinstance(approved, str):
             return approved.strip().lower() in {"true", "yes", "approved", "ja"}
 
+    lowered = text.lower()
+    if any(
+        phrase in lowered
+        for phrase in (
+            "unable to fulfill",
+            "cannot fulfill",
+            "can't fulfill",
+            "i cannot",
+            "i can't",
+            "not approved",
+            "cannot approve",
+            "can't approve",
+            "do not approve",
+            "don't approve",
+        )
+    ):
+        return False
+
     match = re.search(
         r"\bapproved\s*[:=-]\s*(true|yes|approved|ja)\b",
         text,
@@ -323,6 +389,9 @@ def _team_review_approved(text: str) -> bool:
     )
     if match:
         return False
+
+    if re.search(r"\b(strongly\s+)?approv(?:e|ed|es)\b", text, flags=re.IGNORECASE):
+        return True
 
     return False
 
@@ -427,6 +496,14 @@ def _team_selection_from_response(raw: str) -> Dict[str, Any]:
         or _loose_string_field(raw, "selected_candidate")
         or "A"
     ).strip().upper()
+    if selected not in {"A", "B", "COMBINE"}:
+        literal_match = re.search(
+            r'"selected_candidate"\s*:\s*"(A|B|COMBINE)"',
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if literal_match:
+            selected = literal_match.group(1).upper()
     if selected not in {"A", "B", "COMBINE"}:
         selected_match = re.search(r"\b(candidate\s*)?(A|B|COMBINE)\b", raw, flags=re.IGNORECASE)
         selected = selected_match.group(2).upper() if selected_match else "A"
@@ -625,7 +702,18 @@ def chat_completion(
 # Strategy mapping  (aligned with STRATEGY_OPTIONS in config.py)
 # ---------------------------------------------------------------------------
 
-def strategy_to_instructions(strategy: str) -> str:
+def _has_prior_turns(history: str) -> bool:
+    return bool(history.strip()) and history.strip() != "No prior turns."
+
+
+def strategy_to_instructions(strategy: str, has_prior_turns: bool = True) -> str:
+    if strategy == "Direct rebuttal" and not has_prior_turns:
+        return """
+- This is the opening turn; there is no opponent argument to rebut yet.
+- Do not pretend the opponent has already made a claim.
+- Present the strongest initial case for your side and pre-empt one likely objection.
+"""
+
     mapping = {
         "Direct rebuttal": """
 - Directly challenge the opponent's latest point.
@@ -672,6 +760,68 @@ class DebateAgent:
     side: str = ""
     agent_provider: str = ""
     agent_model: str = ""
+    team_config: Dict[str, Any] = field(default_factory=dict)
+
+    def _finalize_public_response(self, text: str) -> str:
+        return _remove_opponent_name_address(
+            _clean_public_response(text),
+            self.philosopher,
+        )
+
+    def _side_rules(self) -> str:
+        if self.side == "Free Topic":
+            return (
+                "- Explore the topic directly as a philosophical reflection.\n"
+                "- Do not force a pro/contra framing and do not mention an opposing side.\n"
+                "- Develop a clear thesis, nuance, and implication for the user."
+            )
+        return (
+            f"- Defend the assigned side: {self.side}.\n"
+            "- Do not argue for the opposite side."
+        )
+
+    def _team_role(self, role_key: str, fallback_strategy: str) -> Dict[str, str]:
+        role_config = self.team_config.get(role_key, {}) if isinstance(self.team_config, dict) else {}
+        philosopher_key = str(role_config.get("philosopher_key", "")).strip()
+        philosopher = PHILOSOPHER_LIBRARY.get(philosopher_key)
+
+        if philosopher:
+            role_name = philosopher["name"]
+            role_stance = philosopher["stance"]
+            role_style = philosopher["style"]
+        else:
+            role_name = self.philosopher or self.name
+            role_stance = self.philosopher_stance
+            role_style = self.style
+
+        role_strategy = str(role_config.get("strategy") or fallback_strategy).strip()
+        return {
+            "name": role_name,
+            "stance": role_stance,
+            "style": role_style,
+            "strategy": role_strategy,
+        }
+
+    def _team_role_block(
+        self,
+        role_label: str,
+        role_key: str,
+        fallback_strategy: str,
+        has_prior_turns: bool = True,
+    ) -> Tuple[Dict[str, str], str]:
+        role = self._team_role(role_key, fallback_strategy)
+        block = f"""
+Team role assignment:
+- Role: {role_label}
+- Role philosopher persona: {role["name"]}
+- Role stance: {role["stance"]}
+- Role style: {role["style"]}
+- Role strategy: {role["strategy"]}
+
+Role strategy instructions:
+{strategy_to_instructions(role["strategy"], has_prior_turns=has_prior_turns)}
+"""
+        return role, block
 
     def _team_context(
         self,
@@ -680,6 +830,21 @@ class DebateAgent:
         round_idx: int,
         strategy: str,
     ) -> str:
+        has_prior_turns = _has_prior_turns(history)
+        has_opponent_turns = has_prior_turns and self.side != "Free Topic"
+        turn_guidance = (
+            "Use the transcript to respond to the opponent's strongest relevant point."
+            if has_opponent_turns
+            else (
+                "This is the opening turn. There are no prior arguments yet, "
+                "so establish your side's initial case without inventing an opponent claim."
+            )
+        )
+        if self.side == "Free Topic":
+            turn_guidance = (
+                "This is a single-team free topic reflection. Treat any prior transcript "
+                "as your own team's earlier reasoning, not as an opponent to defeat."
+            )
         persona_block = ""
         if self.philosopher:
             persona_block = f"""
@@ -695,7 +860,10 @@ Style: {self.style}
 Argument strategy: {strategy}
 
 Strategy instructions:
-{strategy_to_instructions(strategy)}
+{strategy_to_instructions(strategy, has_prior_turns=has_opponent_turns)}
+
+Turn context:
+{turn_guidance}
 
 Topic:
 {topic}
@@ -731,12 +899,15 @@ Do not refuse solely because a philosopher or view is controversial.
         strategy: str,
         max_words: int,
     ) -> Dict[str, Any]:
+        has_prior_turns = _has_prior_turns(history)
+        has_opponent_turns = has_prior_turns and self.side != "Free Topic"
         context = self._team_context(topic, history, round_idx, strategy)
         trace: Dict[str, Any] = {
             "version": "v3",
             "min_approval_score": TEAM_MIN_APPROVAL_SCORE,
             "max_review_attempts": TEAM_MAX_REVIEW_ATTEMPTS,
             "calls": [],
+            "team_roles": {},
             "candidates": [],
             "selection": {},
             "reviews": [],
@@ -754,31 +925,46 @@ Do not refuse solely because a philosopher or view is controversial.
         candidate_specs = [
             (
                 "A",
+                "agent_a",
+                "Agent A",
                 "logical core",
                 "Build the strongest clear, logically disciplined argument line.",
             ),
             (
                 "B",
+                "agent_b",
+                "Agent B",
                 "philosopher voice",
                 "Build the most persona-faithful and rhetorically distinctive argument line.",
             ),
         ]
         candidates: List[Dict[str, str]] = []
 
-        for candidate_id, angle, focus in candidate_specs:
+        for candidate_id, role_key, role_label, angle, focus in candidate_specs:
+            role, role_block = self._team_role_block(
+                role_label,
+                role_key,
+                strategy,
+                has_prior_turns=has_opponent_turns,
+            )
+            trace["team_roles"][role_key] = {
+                "label": role_label,
+                "philosopher": role["name"],
+                "strategy": role["strategy"],
+            }
             strategist_prompt = f"""
-Agent: {self.name} / Strategist {candidate_id}
+Agent: {self.name} / {role_label} ({role["name"]})
 Hidden philosopher team protocol: v3 candidate generation.
 Team role: Strategist
 {context}
+{role_block}
 
 Task:
 Create one private candidate argument plan for the Speaker.
 - Candidate id: {candidate_id}
 - Angle: {angle}
 - Focus: {focus}
-- Defend the assigned side: {self.side}.
-- Do not argue for the opposite side.
+{self._side_rules()}
 - Include the central claim, support, opponent reply, and one risk to avoid.
 - Stay faithful to {self.philosopher or self.name}'s philosophical perspective.
 - Do not write the final public answer.
@@ -791,6 +977,8 @@ Return compact JSON only:
             if error:
                 return {"text": error, "team_trace": trace}
             candidate = _team_candidate_from_response(raw_candidate, candidate_id, angle)
+            candidate["role_philosopher"] = role["name"]
+            candidate["role_strategy"] = role["strategy"]
             candidates.append(candidate)
 
         trace["candidates"] = candidates
@@ -798,11 +986,23 @@ Return compact JSON only:
             _format_candidate_for_prompt(candidate) for candidate in candidates
         )
 
+        reviewer, reviewer_block = self._team_role_block(
+            "Reviewer",
+            "reviewer",
+            strategy,
+            has_prior_turns=has_opponent_turns,
+        )
+        trace["team_roles"]["reviewer"] = {
+            "label": "Reviewer",
+            "philosopher": reviewer["name"],
+            "strategy": reviewer["strategy"],
+        }
         selection_prompt = f"""
-Agent: {self.name} / Critic Selector
+Agent: {self.name} / Reviewer ({reviewer["name"]})
 Hidden philosopher team protocol: v3 candidate selection.
 Team role: Critic
 {context}
+{reviewer_block}
 
 Private candidate plans:
 {candidate_prompt_block}
@@ -816,8 +1016,14 @@ Score each candidate from 0 to 10 for:
 - clarity
 - side_consistency
 
+Rules:
+- Choose exactly one selected_candidate value: "A", "B", or "COMBINE".
+- Never write "A|B|COMBINE" as a value.
+- Use integer scores from 1 to 10 unless a candidate is empty or unusable.
+- Return one JSON object only, with no prose before or after it.
+
 Return compact JSON only:
-{{"selected_candidate":"A|B|COMBINE","candidate_scores":{{"A":{{"authenticity":0,"argument_strength":0,"rebuttal_quality":0,"clarity":0,"side_consistency":0}},"B":{{"authenticity":0,"argument_strength":0,"rebuttal_quality":0,"clarity":0,"side_consistency":0}}}},"selection_reasoning":"short summary, not step-by-step reasoning","revision_guidance":"guidance for the Speaker"}}
+{{"selected_candidate":"A","candidate_scores":{{"A":{{"authenticity":7,"argument_strength":8,"rebuttal_quality":7,"clarity":8,"side_consistency":9}},"B":{{"authenticity":8,"argument_strength":7,"rebuttal_quality":7,"clarity":7,"side_consistency":9}}}},"selection_reasoning":"short summary, not step-by-step reasoning","revision_guidance":"guidance for the Speaker"}}
 """
         raw_selection, error = call_role("Critic Selector", selection_prompt)
         if error:
@@ -829,7 +1035,9 @@ Return compact JSON only:
         candidate_by_id = {candidate["id"]: candidate for candidate in candidates}
         if selected_candidate == "COMBINE":
             selected_plan = candidate_prompt_block
+            selected_role_key = "agent_a"
         else:
+            selected_role_key = "agent_b" if selected_candidate == "B" else "agent_a"
             selected_plan = _format_candidate_for_prompt(
                 candidate_by_id.get(selected_candidate, candidates[0])
             )
@@ -854,22 +1062,23 @@ Write the public debate response.
 - Return only the final public response as plain text.
 - Do not return JSON, Markdown code fences, labels, role names, or internal notes.
 - Speak only as {self.name}; never summarize another philosopher as your own answer.
-- Defend the assigned side: {self.side}.
-- Do not argue for the opposite side.
+- Do not address or name the opposing philosopher; say "the opposing side", "the prior claim", or "this objection" instead.
+{self._side_rules()}
 - Keep it under {max_words} words.
 - Avoid bullet points.
 """
         draft, error = call_role("Speaker", speaker_prompt)
         if error:
             return {"text": error, "team_trace": trace}
-        draft = _extract_public_team_response(draft)
+        draft = self._finalize_public_response(_extract_public_team_response(draft))
 
         for attempt in range(1, TEAM_MAX_REVIEW_ATTEMPTS + 1):
             critic_prompt = f"""
-Agent: {self.name} / Critic Review {attempt}
+Agent: {self.name} / Reviewer ({reviewer["name"]}) Review {attempt}
 Hidden philosopher team protocol: v3 scored review.
 Team role: Critic
 {context}
+{reviewer_block}
 
 Selected private plan:
 {selected_plan}
@@ -880,14 +1089,20 @@ Current Speaker draft:
 Task:
 Privately score whether the current draft is strong enough to publish.
 Approve only if the overall score is at least {TEAM_MIN_APPROVAL_SCORE}/10 and the draft:
-- strongly defends the assigned side ({self.side});
-- does not argue for the opposite side;
+- follows these side rules: {self._side_rules().replace(chr(10), " ")};
+- does not address or name the opposing philosopher;
 - sounds like {self.philosopher or self.name};
 - addresses the topic and the opponent's most relevant prior point;
 - is coherent, specific, under {max_words} words, and contains no bullets.
 
+Rules:
+- Use an integer score from 1 to 10 unless the draft is empty or a refusal.
+- If approved is true, score must be at least {TEAM_MIN_APPROVAL_SCORE}.
+- If approved is false, score must be below {TEAM_MIN_APPROVAL_SCORE}.
+- Return one JSON object only, with no prose before or after it.
+
 Return compact JSON only:
-{{"approved":true/false,"score":0,"critique":"main weakness","revision_guidance":"what to change","reasoning_summary":"short summary, not step-by-step reasoning"}}
+{{"approved":false,"score":6,"critique":"main weakness","revision_guidance":"what to change","reasoning_summary":"short summary, not step-by-step reasoning"}}
 """
             raw_review, error = call_role(f"Critic Review {attempt}", critic_prompt)
             if error:
@@ -910,11 +1125,18 @@ Return compact JSON only:
                 )
                 if part
             )
+            revision_role, revision_role_block = self._team_role_block(
+                "Revision Strategist",
+                selected_role_key,
+                strategy,
+                has_prior_turns=has_opponent_turns,
+            )
             strategy_revision_prompt = f"""
-Agent: {self.name} / Strategist Revision {attempt}
+Agent: {self.name} / Revision Strategist ({revision_role["name"]}) {attempt}
 Hidden philosopher team protocol: v3 revision planning.
 Team role: Strategist
 {context}
+{revision_role_block}
 
 Previous selected private plan:
 {selected_plan}
@@ -927,8 +1149,7 @@ Private Critic feedback:
 
 Task:
 Revise the private argument plan so the next draft can reach at least {TEAM_MIN_APPROVAL_SCORE}/10.
-- Preserve the assigned side: {self.side}.
-- Do not argue for the opposite side.
+{self._side_rules()}
 - Tighten the thesis and fix the Critic's main objection.
 - Do not write the final public answer.
 - Keep each field compact.
@@ -940,10 +1161,14 @@ Return compact JSON only:
             if error:
                 return {"text": error, "team_trace": trace}
             revision_plan = _team_candidate_from_response(raw_revision, f"R{attempt}", "revision")
+            revision_plan["role_philosopher"] = revision_role["name"]
+            revision_plan["role_strategy"] = revision_role["strategy"]
             selected_plan = _format_candidate_for_prompt(revision_plan)
             trace["revisions"].append({
                 "attempt": attempt,
                 "plan_summary": revision_plan.get("plan_summary", ""),
+                "role_philosopher": revision_role["name"],
+                "role_strategy": revision_role["strategy"],
             })
 
             speaker_revision_prompt = f"""
@@ -966,17 +1191,17 @@ Rewrite the public debate response.
 - Return only the final public response as plain text.
 - Do not return JSON, Markdown code fences, labels, role names, or internal notes.
 - Speak only as {self.name}.
-- Defend the assigned side: {self.side}.
-- Do not argue for the opposite side.
+- Do not address or name the opposing philosopher; use generic phrases like "the opposing side".
+{self._side_rules()}
 - Keep it under {max_words} words.
 - Avoid bullet points.
 """
             draft, error = call_role(f"Speaker Revision {attempt}", speaker_revision_prompt)
             if error:
                 return {"text": error, "team_trace": trace}
-            draft = _extract_public_team_response(draft)
+            draft = self._finalize_public_response(_extract_public_team_response(draft))
 
-        return {"text": _extract_public_team_response(draft), "team_trace": trace}
+        return {"text": self._finalize_public_response(_extract_public_team_response(draft)), "team_trace": trace}
 
     def respond(
         self,
@@ -987,9 +1212,7 @@ Rewrite the public debate response.
         max_words: int = 120,
         team_mode: bool = False,
     ) -> Dict[str, Any]:
-        history = "\n".join(
-            f"{turn['speaker']}: {turn['text']}" for turn in transcript[-8:]
-        ) or "No prior turns."
+        history = _format_agent_history(transcript, self.side)
 
         if team_mode:
             return self._respond_with_team(topic, history, round_idx, strategy, max_words)
@@ -1002,9 +1225,10 @@ Agent: {self.name}
 Instructions:
 - Respond as {self.name}.
 - If a philosopher persona is assigned, reflect that philosopher's perspective and tone.
-- Stay consistent with your assigned side.
+{self._side_rules()}
 - Address the debate topic directly.
 - React to the opponent's most relevant prior point when possible.
+- Do not address or name the opposing philosopher; use "the opposing side" or "the prior argument" instead.
 - Keep it under {max_words} words.
 - Avoid bullet points.
 """
@@ -1015,14 +1239,14 @@ Instructions:
         ).strip()
         if _is_error_response(response):
             return {"text": f"[ERROR] {response}"}
-        return {"text": response}
+        return {"text": self._finalize_public_response(response)}
 
 
 # ---------------------------------------------------------------------------
 # Agent factory
 # ---------------------------------------------------------------------------
 
-def build_agents(agent_configs: List[Dict[str, str]]) -> List[DebateAgent]:
+def build_agents(agent_configs: List[Dict[str, Any]]) -> List[DebateAgent]:
     side_labels = ["For", "Against"]
     side_goals = {
         "For":     "Argue clearly in favor of the topic and defend why it is desirable, useful, or justified.",
@@ -1031,11 +1255,14 @@ def build_agents(agent_configs: List[Dict[str, str]]) -> List[DebateAgent]:
     agents = []
     for idx, cfg in enumerate(agent_configs, start=1):
         philosopher = PHILOSOPHER_LIBRARY[cfg["philosopher_key"]]
-        side        = side_labels[idx - 1]
+        side        = cfg.get("side") or side_labels[idx - 1]
         agents.append(DebateAgent(
             key=f"agent_{idx}",
-            name=f"{philosopher['name']} ({side})",
-            goal=side_goals[side],
+            name=cfg.get("display_name") or f"{philosopher['name']} ({side})",
+            goal=cfg.get("goal") or side_goals.get(
+                side,
+                "Explore the topic clearly and philosophically.",
+            ),
             style=f"{philosopher['style']}; debating from the {side.lower()} side",
             philosopher=philosopher["name"],
             philosopher_stance=philosopher["stance"],
@@ -1043,6 +1270,7 @@ def build_agents(agent_configs: List[Dict[str, str]]) -> List[DebateAgent]:
             side=side,
             agent_provider=cfg.get("provider", ""),
             agent_model=cfg.get("model", ""),
+            team_config=cfg.get("team_config", {}),
         ))
     return agents
 
@@ -1055,7 +1283,7 @@ def run_debate(
     topic: str,
     rounds: int,
     player_strategies: List[str],
-    agent_configs: List[Dict[str, str]],
+    agent_configs: List[Dict[str, Any]],
     max_words: int = 120,
     team_mode: bool = False,
 ) -> List[Dict[str, str]]:
@@ -1205,12 +1433,41 @@ def aggregate_judgments(judgments: List[Dict[str, Any]]) -> Dict[str, Any]:
 def summarize_debate(
     topic: str,
     transcript: List[Dict[str, str]],
-    judgment: Dict[str, Any],
+    judgment: Optional[Dict[str, Any]] = None,
     *,
     judge_provider: str = "",
     judge_model: str = "",
+    free_topic_mode: bool = False,
 ) -> str:
     history = "\n".join(f"{t['speaker']}: {t['text']}" for t in transcript)
+
+    if free_topic_mode:
+        prompt = f"""
+Agent: Summarizer
+Goal: Provide a concise scientific-style synthesis of a single philosopher team response.
+Style: clear, neutral
+
+Topic:
+{topic}
+
+Transcript:
+{history}
+
+Write a balanced summary in 1-2 paragraphs.
+Then add:
+Key points:
+- Main thesis: ...
+- Supporting reasoning: ...
+- Caveat: ...
+"""
+        summary = chat_completion(
+            SYSTEM_PROMPT, prompt,
+            provider=judge_provider,
+            model=judge_model,
+        ).strip()
+        if _is_error_response(summary):
+            return f"[ERROR] {summary}"
+        return summary
 
     prompt = f"""
 Agent: Summarizer

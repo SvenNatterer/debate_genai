@@ -65,6 +65,19 @@ MAX_AGENT_MAX_WORDS = 300
 DEFAULT_ARGUMENT_ROUNDS = 2
 MIN_ARGUMENT_ROUNDS = 1
 MAX_ARGUMENT_ROUNDS = 5
+TEAM_SIDE_KEYS = ("for", "against")
+TEAM_CONFIG_SIDE_KEYS = ("for", "against", "free")
+TEAM_SIDE_LABELS = {
+    "for": "For team",
+    "against": "Against team",
+    "free": "Free topic team",
+}
+TEAM_ROLE_DEFS = (
+    ("agent_a", "Agent A", "socrates"),
+    ("agent_b", "Agent B", "nietzsche"),
+    ("reviewer", "Reviewer", "aristotle"),
+)
+TEAM_DEFAULTS_VERSION = 3
 
 
 def image_to_data_uri(image_path: str) -> str:
@@ -78,7 +91,7 @@ _DEBATE_PARAM_KEYS = [
     "_dp_judge1_model", "_dp_judge2_model", "_dp_judge3_model",
     "_dp_agent_configs", "_dp_agent_max_words", "_dp_rounds",
     "_dp_developer_mode", "_dp_audio_output", "_dp_audio_autoplay",
-    "_dp_philosopher_teams",
+    "_dp_philosopher_teams", "_dp_team_configs", "_dp_start_mode",
     "_audio_debate_id", "_audio_autoplay_seen_id",
     "_character_stage_seeded",
     "_loading_screen_primed",
@@ -107,6 +120,9 @@ def reset_game() -> None:
     st.session_state["audio_output"] = False
     st.session_state["audio_autoplay"] = False
     st.session_state["philosopher_teams"] = False
+    st.session_state["start_mode"] = "single"
+    st.session_state["free_topic_input"] = ""
+    _reset_team_mode_defaults()
 
     st.session_state["_pref_summary"] = False  # reset to default on new game
     st.session_state["_pref_agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
@@ -115,10 +131,12 @@ def reset_game() -> None:
     st.session_state["_pref_audio_output"] = False
     st.session_state["_pref_audio_autoplay"] = False
     st.session_state["_pref_philosopher_teams"] = False
+    st.session_state["_pref_start_mode"] = "single"
+    st.session_state["_pref_team_configs"] = _team_configs_from_state()
 
     for key in [
         "transcript", "judgment", "judge_results", "summary", "topic", "agent_configs",
-        "token_usage", "team_traces", "team_mode_active",
+        "token_usage", "team_traces", "team_mode_active", "team_configs",
         *_DEBATE_PARAM_KEYS,
     ]:
         st.session_state.pop(key, None)
@@ -133,13 +151,23 @@ def _save_debate_params(agent1_name: str | None = None, agent2_name: str | None 
     default_m = list(MODEL_OPTIONS.keys())[0]
     resolved_agent1_name = agent1_name or st.session_state.get("ui_agent1_philosopher_name") or st.session_state.get("agent1_philosopher_name")
     resolved_agent2_name = agent2_name or st.session_state.get("ui_agent2_philosopher_name") or st.session_state.get("agent2_philosopher_name")
+    start_mode = _current_start_mode()
 
     st.session_state["_dp_phil1"]       = _valid_philosopher_name(resolved_agent1_name, "socrates")
-    st.session_state["_dp_phil2"]       = _valid_philosopher_name(resolved_agent2_name, "nietzsche")
-    st.session_state["_dp_agent_configs"] = _agent_configs_from_names(
-        st.session_state["_dp_phil1"],
-        st.session_state["_dp_phil2"],
-    )
+    st.session_state["_dp_start_mode"]  = start_mode
+    if start_mode == "free":
+        st.session_state["_dp_phil2"] = ""
+        st.session_state["_dp_agent_configs"] = _agent_configs_from_names(
+            st.session_state["_dp_phil1"],
+            None,
+            single=True,
+        )
+    else:
+        st.session_state["_dp_phil2"] = _valid_philosopher_name(resolved_agent2_name, "nietzsche")
+        st.session_state["_dp_agent_configs"] = _agent_configs_from_names(
+            st.session_state["_dp_phil1"],
+            st.session_state["_dp_phil2"],
+        )
     st.session_state["_dp_model1"]      = st.session_state.get("agent1_model_label", default_m)
     st.session_state["_dp_model2"]      = st.session_state.get("agent2_model_label", default_m)
     st.session_state["_dp_strat1"]      = st.session_state.get("player1_strategy", STRATEGY_OPTIONS[0])
@@ -168,7 +196,10 @@ def _save_debate_params(agent1_name: str | None = None, agent2_name: str | None 
         st.session_state.get("_pref_philosopher_teams")
         or st.session_state.get("philosopher_teams", False)
     )
-    num_j = st.session_state.get("num_judges", 1)
+    team_configs = _team_configs_from_state()
+    st.session_state["_pref_team_configs"] = team_configs
+    st.session_state["_dp_team_configs"] = team_configs
+    num_j = 0 if start_mode == "free" else st.session_state.get("num_judges", 1)
     st.session_state["_dp_num_judges"]  = num_j
     for i in range(3):
         st.session_state[f"_dp_judge{i+1}_model"] = st.session_state.get(
@@ -210,6 +241,15 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("audio_output", False)
     st.session_state.setdefault("audio_autoplay", False)
     st.session_state.setdefault("philosopher_teams", False)
+    st.session_state.setdefault("start_mode", "single")
+    st.session_state.setdefault("free_topic_input", "")
+    if (
+        st.session_state.get("philosopher_teams")
+        and st.session_state.get("_team_defaults_version") != TEAM_DEFAULTS_VERSION
+    ):
+        _reset_team_mode_defaults()
+    else:
+        _ensure_team_mode_defaults()
     st.session_state.setdefault("_pref_summary", False)
     st.session_state.setdefault("_pref_agent_max_words", DEFAULT_AGENT_MAX_WORDS)
     st.session_state.setdefault("_pref_rounds", DEFAULT_ARGUMENT_ROUNDS)
@@ -217,6 +257,8 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("_pref_audio_output", False)
     st.session_state.setdefault("_pref_audio_autoplay", False)
     st.session_state.setdefault("_pref_philosopher_teams", False)
+    st.session_state.setdefault("_pref_start_mode", "single")
+    st.session_state.setdefault("_pref_team_configs", _team_configs_from_state())
 
 
 # Helper function to validate philosopher names
@@ -228,6 +270,76 @@ def _valid_philosopher_name(value: str | None, fallback_key: str) -> str:
         return value
 
     return fallback_name
+
+
+def _current_start_mode() -> str:
+    mode = (
+        st.session_state.get("_dp_start_mode")
+        or st.session_state.get("_pref_start_mode")
+        or st.session_state.get("start_mode")
+        or "single"
+    )
+    return mode if mode in {"single", "team", "free"} else "single"
+
+
+def _philosopher_name_from_key(key: str) -> str:
+    return PHILOSOPHER_LIBRARY.get(key, PHILOSOPHER_LIBRARY["socrates"])["name"]
+
+
+def _philosopher_key_from_name(name: str | None, fallback_key: str) -> str:
+    philosopher_options = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
+    valid_name = _valid_philosopher_name(name, fallback_key)
+    return philosopher_options[valid_name]
+
+
+def _team_widget_key(side: str, role_key: str, field: str) -> str:
+    return f"team_v{TEAM_DEFAULTS_VERSION}_{side}_{role_key}_{field}"
+
+
+def _team_role_defaults(side: str, role_key: str, fallback_key: str) -> tuple[str, str]:
+    if side == "against" and role_key == "agent_a":
+        fallback_key = "nietzsche"
+    if side == "against" and role_key == "agent_b":
+        fallback_key = "socrates"
+    default_strategy = "Evidence-focused" if side == "free" else STRATEGY_OPTIONS[0]
+    return _philosopher_name_from_key(fallback_key), default_strategy
+
+
+def _ensure_team_mode_defaults() -> None:
+    for side in TEAM_CONFIG_SIDE_KEYS:
+        for role_key, _role_label, fallback_key in TEAM_ROLE_DEFS:
+            default_name, default_strategy = _team_role_defaults(side, role_key, fallback_key)
+            st.session_state.setdefault(_team_widget_key(side, role_key, "philosopher"), default_name)
+            st.session_state.setdefault(_team_widget_key(side, role_key, "strategy"), default_strategy)
+
+
+def _reset_team_mode_defaults() -> None:
+    for side in TEAM_CONFIG_SIDE_KEYS:
+        for role_key, _role_label, fallback_key in TEAM_ROLE_DEFS:
+            default_name, default_strategy = _team_role_defaults(side, role_key, fallback_key)
+            st.session_state[_team_widget_key(side, role_key, "philosopher")] = default_name
+            st.session_state[_team_widget_key(side, role_key, "strategy")] = default_strategy
+    st.session_state["_team_defaults_version"] = TEAM_DEFAULTS_VERSION
+
+
+def _team_configs_from_state() -> dict:
+    _ensure_team_mode_defaults()
+    configs: dict = {}
+    for side in TEAM_CONFIG_SIDE_KEYS:
+        side_config: dict = {}
+        for role_key, role_label, fallback_key in TEAM_ROLE_DEFS:
+            philosopher_name = st.session_state.get(_team_widget_key(side, role_key, "philosopher"))
+            strategy = st.session_state.get(_team_widget_key(side, role_key, "strategy"), STRATEGY_OPTIONS[0])
+            if strategy not in STRATEGY_OPTIONS:
+                strategy = STRATEGY_OPTIONS[0]
+            side_config[role_key] = {
+                "label": role_label,
+                "philosopher_key": _philosopher_key_from_name(philosopher_name, fallback_key),
+                "philosopher_name": _valid_philosopher_name(philosopher_name, fallback_key),
+                "strategy": strategy,
+            }
+        configs[side] = side_config
+    return configs
 
 
 def _valid_agent_max_words(value: int | str | None) -> int:
@@ -248,22 +360,31 @@ def _valid_argument_rounds(value: int | str | None) -> int:
     return max(MIN_ARGUMENT_ROUNDS, min(MAX_ARGUMENT_ROUNDS, rounds))
 
 
-def _agent_configs_from_names(agent1_name: str | None, agent2_name: str | None):
+def _agent_configs_from_names(
+    agent1_name: str | None,
+    agent2_name: str | None,
+    single: bool = False,
+):
     philosopher_options = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
 
     agent1_name = _valid_philosopher_name(agent1_name, "socrates")
     agent2_name = _valid_philosopher_name(agent2_name, "nietzsche")
 
-    return [
+    configs = [
         {
             "philosopher_key": philosopher_options[agent1_name],
             "philosopher_name": agent1_name,
-        },
+        }
+    ]
+    if single:
+        return configs
+    configs.append(
         {
             "philosopher_key": philosopher_options[agent2_name],
             "philosopher_name": agent2_name,
-        },
-    ]
+        }
+    )
+    return configs
 
 
 def _seed_character_stage_widgets() -> None:
@@ -289,10 +410,14 @@ def _clear_stale_stage_tail(slots: int = 30) -> None:
 
 
 def current_agent_configs(use_saved_params: bool = False):
+    start_mode = _current_start_mode()
     if use_saved_params:
         saved_configs = st.session_state.get("_dp_agent_configs")
-        if isinstance(saved_configs, list) and len(saved_configs) >= 2:
-            return saved_configs[:2]
+        if isinstance(saved_configs, list):
+            if start_mode == "free" and len(saved_configs) >= 1:
+                return saved_configs[:1]
+            if len(saved_configs) >= 2:
+                return saved_configs[:2]
 
     if use_saved_params:
         raw_agent1_name = (
@@ -309,7 +434,11 @@ def current_agent_configs(use_saved_params: bool = False):
         raw_agent1_name = st.session_state.get("ui_agent1_philosopher_name") or st.session_state.get("agent1_philosopher_name")
         raw_agent2_name = st.session_state.get("ui_agent2_philosopher_name") or st.session_state.get("agent2_philosopher_name")
 
-    return _agent_configs_from_names(raw_agent1_name, raw_agent2_name)
+    return _agent_configs_from_names(
+        raw_agent1_name,
+        raw_agent2_name,
+        single=start_mode == "free",
+    )
 
 
 def render_header() -> None:
@@ -488,6 +617,7 @@ def render_team_traces_panel(entries: list[dict]) -> None:
         selection = trace.get("selection", {}) if isinstance(trace, dict) else {}
         reviews = trace.get("reviews", []) if isinstance(trace, dict) else []
         revisions = trace.get("revisions", []) if isinstance(trace, dict) else []
+        team_roles = trace.get("team_roles", {}) if isinstance(trace, dict) else {}
         selected = selection.get("selected_candidate", "-") if isinstance(selection, dict) else "-"
         final_score = int(trace.get("final_score", 0) or 0) if isinstance(trace, dict) else 0
         approved = bool(trace.get("approved", False)) if isinstance(trace, dict) else False
@@ -500,6 +630,14 @@ def render_team_traces_panel(entries: list[dict]) -> None:
         )
 
         with st.expander(title, expanded=True):
+            if isinstance(team_roles, dict) and team_roles:
+                role_summary = " | ".join(
+                    f"{role.get('label', key)}: {role.get('philosopher', '-')}"
+                    f" / {role.get('strategy', '-')}"
+                    for key, role in team_roles.items()
+                    if isinstance(role, dict)
+                )
+                st.caption(role_summary)
             st.markdown("**Candidate reasoning**")
             if candidates:
                 for candidate in candidates:
@@ -507,8 +645,12 @@ def render_team_traces_panel(entries: list[dict]) -> None:
                         continue
                     cid = _dev_text(candidate.get("id", "Candidate"), 60)
                     angle = _dev_text(candidate.get("angle", ""), 80)
+                    role_name = _dev_text(candidate.get("role_philosopher", ""), 80)
+                    role_strategy = _dev_text(candidate.get("role_strategy", ""), 80)
                     summary = _dev_text(candidate.get("plan_summary", ""), 700)
-                    st.markdown(f"**{cid}** · {angle}")
+                    role_bits = f" · {role_name}" if role_name else ""
+                    strategy_bits = f" · {role_strategy}" if role_strategy else ""
+                    st.markdown(f"**{cid}** · {angle}{role_bits}{strategy_bits}")
                     st.write(summary or "No candidate summary captured.")
             else:
                 st.caption("No candidate summaries captured.")
@@ -555,6 +697,10 @@ def render_team_traces_panel(entries: list[dict]) -> None:
                     if not isinstance(revision, dict):
                         continue
                     st.markdown(f"**Revision {int(revision.get('attempt', 0) or 0)}**")
+                    role_name = _dev_text(revision.get("role_philosopher", ""), 80)
+                    role_strategy = _dev_text(revision.get("role_strategy", ""), 80)
+                    if role_name or role_strategy:
+                        st.caption(f"{role_name} / {role_strategy}")
                     st.write(_dev_text(revision.get("plan_summary", ""), 700))
 
 
@@ -571,7 +717,7 @@ def render_development_panel() -> None:
             <div class="topic-label">Development</div>
             <div class="score-card">
                 <div class="score-grid">
-                    <div>Philosopher Teams: {team_status}</div>
+                    <div>Team Mode: {team_status}</div>
                     <div>Team Internals: Reasoning summaries</div>
                 </div>
             </div>
@@ -919,19 +1065,155 @@ def render_debate_audio_panel(
     )
 
 
+def render_team_character_selection() -> tuple[str, str]:
+    _ensure_team_mode_defaults()
+    philosopher_names = [v["name"] for v in PHILOSOPHER_LIBRARY.values()]
+    st.markdown("**Team Philosopher Selection**")
+
+    tabs = st.tabs([TEAM_SIDE_LABELS[side] for side in TEAM_SIDE_KEYS])
+    for side, tab in zip(TEAM_SIDE_KEYS, tabs):
+        with tab:
+            role_cols = st.columns(len(TEAM_ROLE_DEFS))
+            for role_col, (role_key, role_label, fallback_key) in zip(role_cols, TEAM_ROLE_DEFS):
+                with role_col:
+                    philosopher_key = _team_widget_key(side, role_key, "philosopher")
+                    strategy_key = _team_widget_key(side, role_key, "strategy")
+                    current_name = _valid_philosopher_name(
+                        st.session_state.get(philosopher_key),
+                        fallback_key,
+                    )
+                    current_strategy = st.session_state.get(strategy_key, STRATEGY_OPTIONS[0])
+                    if current_strategy not in STRATEGY_OPTIONS:
+                        current_strategy = STRATEGY_OPTIONS[0]
+                    selected_name = st.selectbox(
+                        f"{role_label} Philosopher",
+                        options=philosopher_names,
+                        index=philosopher_names.index(current_name),
+                        key=philosopher_key,
+                    )
+                    st.selectbox(
+                        f"{role_label} Strategy",
+                        options=STRATEGY_OPTIONS,
+                        index=STRATEGY_OPTIONS.index(current_strategy),
+                        key=strategy_key,
+                    )
+                    selected_key = _philosopher_key_from_name(selected_name, fallback_key)
+                    render_fighter_card(
+                        selected_key,
+                        f"{role_label} • {TEAM_SIDE_LABELS[side]}",
+                    )
+
+    team_configs = _team_configs_from_state()
+    agent1_name = team_configs["for"]["agent_a"]["philosopher_name"]
+    agent2_name = team_configs["against"]["agent_a"]["philosopher_name"]
+    st.session_state["agent1_philosopher_name"] = agent1_name
+    st.session_state["agent2_philosopher_name"] = agent2_name
+    st.session_state["ui_agent1_philosopher_name"] = agent1_name
+    st.session_state["ui_agent2_philosopher_name"] = agent2_name
+    st.session_state["player1_strategy"] = team_configs["for"]["agent_a"]["strategy"]
+    st.session_state["player2_strategy"] = team_configs["against"]["agent_a"]["strategy"]
+    st.session_state["_pref_team_configs"] = team_configs
+    return agent1_name, agent2_name
+
+
+def render_free_team_character_selection() -> str:
+    _ensure_team_mode_defaults()
+    side = "free"
+    philosopher_names = [v["name"] for v in PHILOSOPHER_LIBRARY.values()]
+    st.markdown("**Free Topic Philosopher Team**")
+
+    role_cols = st.columns(len(TEAM_ROLE_DEFS))
+    for role_col, (role_key, role_label, fallback_key) in zip(role_cols, TEAM_ROLE_DEFS):
+        with role_col:
+            philosopher_key = _team_widget_key(side, role_key, "philosopher")
+            strategy_key = _team_widget_key(side, role_key, "strategy")
+            current_name = _valid_philosopher_name(
+                st.session_state.get(philosopher_key),
+                fallback_key,
+            )
+            current_strategy = st.session_state.get(strategy_key, STRATEGY_OPTIONS[0])
+            if current_strategy not in STRATEGY_OPTIONS:
+                current_strategy = STRATEGY_OPTIONS[0]
+            selected_name = st.selectbox(
+                f"{role_label} Philosopher",
+                options=philosopher_names,
+                index=philosopher_names.index(current_name),
+                key=philosopher_key,
+            )
+            st.selectbox(
+                f"{role_label} Strategy",
+                options=STRATEGY_OPTIONS,
+                index=STRATEGY_OPTIONS.index(current_strategy),
+                key=strategy_key,
+            )
+            selected_key = _philosopher_key_from_name(selected_name, fallback_key)
+            render_fighter_card(selected_key, f"{role_label} • {TEAM_SIDE_LABELS[side]}")
+
+    team_configs = _team_configs_from_state()
+    agent_name = team_configs["free"]["agent_a"]["philosopher_name"]
+    st.session_state["agent1_philosopher_name"] = agent_name
+    st.session_state["agent2_philosopher_name"] = ""
+    st.session_state["ui_agent1_philosopher_name"] = agent_name
+    st.session_state["player1_strategy"] = team_configs["free"]["agent_a"]["strategy"]
+    st.session_state["_pref_team_configs"] = team_configs
+    return agent_name
+
+
+def _save_start_preferences(philosopher_teams: bool, start_mode: str) -> None:
+    if philosopher_teams:
+        _reset_team_mode_defaults()
+    st.session_state["philosopher_teams"] = philosopher_teams
+    st.session_state["start_mode"] = start_mode
+    st.session_state["_pref_start_mode"] = start_mode
+    st.session_state["_pref_summary"] = st.session_state.get("include_summary", False)
+    st.session_state["_pref_agent_max_words"] = _valid_agent_max_words(
+        st.session_state.get("agent_max_words")
+    )
+    st.session_state["_pref_rounds"] = _valid_argument_rounds(
+        st.session_state.get("rounds")
+    )
+    st.session_state["_pref_developer_mode"] = st.session_state.get("developer_mode", False)
+    st.session_state["_pref_audio_output"] = st.session_state.get("audio_output", False)
+    st.session_state["_pref_audio_autoplay"] = (
+        st.session_state.get("audio_output", False)
+        and st.session_state.get("audio_autoplay", False)
+    )
+    st.session_state["_pref_philosopher_teams"] = philosopher_teams
+    st.session_state["_pref_team_configs"] = _team_configs_from_state()
+
+
 def render_start_screen() -> None:
     st.markdown(
         """
         <div class="arcade-panel" style="text-align:center;">
-            <div style="font-size:2rem; font-weight:800; margin-bottom:1rem;">Philosopher Arena</div>
-            <div style="font-size:1.1rem; color:#cfd8ff; margin-bottom:1rem;">Loading Debate Engine</div>
-            <div class="blink" style="font-size:1.2rem; font-weight:800; color:#ffd54a;">Press Start</div>
+            <div style="font-size:2rem; font-weight:800; margin-bottom:1rem;">Choose Game Mode</div>
+            <div style="font-size:1.1rem; color:#cfd8ff; margin-bottom:0.7rem;">Select your debate format</div>
+            <div style="font-size:0.95rem; font-weight:800; color:#ffd54a; text-transform:uppercase; letter-spacing:0.08em;">Debate engine ready</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
     st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+
+    mode_col1, mode_col2, mode_col3 = st.columns(3)
+    with mode_col1:
+        if st.button("Single Philosopher Mode", type="primary", use_container_width=True):
+            _save_start_preferences(False, "single")
+            st.session_state["stage"] = 1
+            st.rerun()
+    with mode_col2:
+        if st.button("Team Philosopher Mode", type="primary", use_container_width=True):
+            _save_start_preferences(True, "team")
+            st.session_state["stage"] = 1
+            st.rerun()
+    with mode_col3:
+        if st.button("Free Topic Mode", type="primary", use_container_width=True):
+            _save_start_preferences(True, "free")
+            st.session_state["stage"] = 1
+            st.rerun()
+
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
     with st.expander("Settings", expanded=False):
         setting_col1, setting_col2 = st.columns([1, 2])
@@ -950,11 +1232,6 @@ def render_start_screen() -> None:
                 "Developer mode",
                 key="developer_mode",
                 help="Show development diagnostics such as token usage after a run.",
-            )
-            st.checkbox(
-                "Philosopher teams",
-                key="philosopher_teams",
-                help="Use V3 hidden candidate strategies, critic scoring, and speaker revision for each philosopher turn.",
             )
         with setting_col2:
             st.slider(
@@ -979,30 +1256,37 @@ def render_start_screen() -> None:
                 help="Try to read the full debate automatically when the arena opens.",
             )
 
-    if st.button("Start Game", type="primary", use_container_width=True):
-        # Save to a stable key before transitioning — the widget key will be
-        # disowned once stage 0 is no longer rendered.
-        st.session_state["_pref_summary"] = st.session_state.get("include_summary", False)
-        st.session_state["_pref_agent_max_words"] = _valid_agent_max_words(
-            st.session_state.get("agent_max_words")
-        )
-        st.session_state["_pref_rounds"] = _valid_argument_rounds(
-            st.session_state.get("rounds")
-        )
-        st.session_state["_pref_developer_mode"] = st.session_state.get("developer_mode", False)
-        st.session_state["_pref_audio_output"] = st.session_state.get("audio_output", False)
-        st.session_state["_pref_audio_autoplay"] = (
-            st.session_state.get("audio_output", False)
-            and st.session_state.get("audio_autoplay", False)
-        )
-        st.session_state["_pref_philosopher_teams"] = st.session_state.get(
-            "philosopher_teams", False
-        )
-        st.session_state["stage"] = 1
-        st.rerun()
-
 
 def render_topic_stage() -> None:
+    if _current_start_mode() == "free":
+        st.markdown(
+            """
+            <div class="topic-panel">
+                <div class="topic-label">Free Topic</div>
+                <div class="topic-text">Enter the topic your philosopher team should explore.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.form("free_topic_form"):
+            topic_text = st.text_area(
+                "Topic",
+                key="free_topic_input",
+                height=120,
+                placeholder="Example: What does authenticity mean in an age of artificial intelligence?",
+            )
+            submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+
+        if submitted:
+            clean_topic = topic_text.strip()
+            if clean_topic:
+                st.session_state["selected_topic"] = clean_topic
+                st.session_state["_character_stage_seeded"] = False
+                st.session_state["stage"] = 2
+                st.rerun()
+            st.warning("Please enter a topic before continuing.")
+        return
+
     render_topic_panel(st.session_state["selected_topic"])
 
     col1, col2 = st.columns(2)
@@ -1023,109 +1307,169 @@ def render_character_stage() -> None:
     model_keys   = list(MODEL_OPTIONS.keys())
     judge_keys   = ["judge1_model_label", "judge2_model_label", "judge3_model_label"]
     judge_labels = ["⚖️ Judge 1 Model", "⚖️ Judge 2 Model", "⚖️ Judge 3 Model"]
+    start_mode = _current_start_mode()
+    free_topic_mode = start_mode == "free"
 
     # ── Philosophers ──────────────────────────────────────────────────────────
-    philosopher_names = [v["name"] for v in PHILOSOPHER_LIBRARY.values()]
-    _seed_character_stage_widgets()
+    philosopher_teams = bool(
+        st.session_state.get("_pref_philosopher_teams")
+        or st.session_state.get("philosopher_teams", False)
+    )
+    if free_topic_mode:
+        agent1_name = render_free_team_character_selection()
+        agent2_name = ""
+    elif philosopher_teams:
+        agent1_name, agent2_name = render_team_character_selection()
+    else:
+        philosopher_names = [v["name"] for v in PHILOSOPHER_LIBRARY.values()]
+        _seed_character_stage_widgets()
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        agent1_name = st.selectbox(
-            "Player 1 Philosopher",
-            options=philosopher_names,
-            key="ui_agent1_philosopher_name",
-        )
-    with col_b:
-        agent2_name = st.selectbox(
-            "Player 2 Philosopher",
-            options=philosopher_names,
-            key="ui_agent2_philosopher_name",
-        )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            agent1_name = st.selectbox(
+                "Player 1 Philosopher",
+                options=philosopher_names,
+                key="ui_agent1_philosopher_name",
+            )
+        with col_b:
+            agent2_name = st.selectbox(
+                "Player 2 Philosopher",
+                options=philosopher_names,
+                key="ui_agent2_philosopher_name",
+            )
 
-    # Keep non-widget display keys synchronized with the current selectbox values.
-    # These keys are not bound to widgets, so they can safely be updated here.
-    st.session_state["agent1_philosopher_name"] = agent1_name
-    st.session_state["agent2_philosopher_name"] = agent2_name
+        st.session_state["agent1_philosopher_name"] = agent1_name
+        st.session_state["agent2_philosopher_name"] = agent2_name
 
-    # ── Strategies ────────────────────────────────────────────────────────────
-    strategy_col1, strategy_col2 = st.columns(2)
-    with strategy_col1:
-        st.selectbox("Player 1 Strategy", options=STRATEGY_OPTIONS, key="player1_strategy")
-    with strategy_col2:
-        st.selectbox("Player 2 Strategy", options=STRATEGY_OPTIONS, key="player2_strategy")
+        strategy_col1, strategy_col2 = st.columns(2)
+        with strategy_col1:
+            st.selectbox("Player 1 Strategy", options=STRATEGY_OPTIONS, key="player1_strategy")
+        with strategy_col2:
+            st.selectbox("Player 2 Strategy", options=STRATEGY_OPTIONS, key="player2_strategy")
 
-    philosopher_options = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
-    agent1_key = philosopher_options[_valid_philosopher_name(agent1_name, "socrates")]
-    agent2_key = philosopher_options[_valid_philosopher_name(agent2_name, "nietzsche")]
+        philosopher_options = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
+        agent1_key = philosopher_options[_valid_philosopher_name(agent1_name, "socrates")]
+        agent2_key = philosopher_options[_valid_philosopher_name(agent2_name, "nietzsche")]
 
-    card_col1, card_col2 = st.columns(2)
-    with card_col1:
-        render_fighter_card(agent1_key, "Player 1 • For")
-    with card_col2:
-        render_fighter_card(agent2_key, "Player 2 • Against")
+        card_col1, card_col2 = st.columns(2)
+        with card_col1:
+            render_fighter_card(agent1_key, "Player 1 • For")
+        with card_col2:
+            render_fighter_card(agent2_key, "Player 2 • Against")
 
     # ── Debater models ────────────────────────────────────────────────────────
     st.markdown("**Debater Models**")
-    dcol1, dcol2 = st.columns(2)
-    with dcol1:
+    if free_topic_mode:
         st.selectbox(
-            "🤖 Player 1 Model",
+            "🤖 Free Topic Team Model",
             options=model_keys,
             key="agent1_model_label",
-            help="Model used by the FOR debater.",
+            help="Model used by the free topic philosopher team.",
         )
-    with dcol2:
-        st.selectbox(
-            "🤖 Player 2 Model",
-            options=model_keys,
-            key="agent2_model_label",
-            help="Model used by the AGAINST debater.",
-        )
-
-    # ── Judge panel ───────────────────────────────────────────────────────────
-    st.markdown("<div style='height:0.3rem'></div>", unsafe_allow_html=True)
-    st.markdown("**Judge Panel**")
-    num_judges = st.radio(
-        "Number of Judges",
-        options=[1, 2, 3],
-        format_func=lambda n: f"{n} Judge{'s' if n > 1 else ''}",
-        horizontal=True,
-        key="num_judges",
-    )
-    focus_hints = [
-        "General evaluation across all metrics.",
-        "2 judges: Logic & Reasoning focus.",
-        "3 judges: Clarity & Communication focus.",
-    ]
-    jcols = st.columns(num_judges)
-    for i in range(num_judges):
-        with jcols[i]:
+    else:
+        dcol1, dcol2 = st.columns(2)
+        with dcol1:
             st.selectbox(
-                judge_labels[i],
+                "🤖 Player 1 Model",
                 options=model_keys,
-                key=judge_keys[i],
-                help=JUDGE_FOCUS[num_judges][i] or focus_hints[i],
+                key="agent1_model_label",
+                help="Model used by the FOR debater.",
+            )
+        with dcol2:
+            st.selectbox(
+                "🤖 Player 2 Model",
+                options=model_keys,
+                key="agent2_model_label",
+                help="Model used by the AGAINST debater.",
             )
 
+    # ── Judge panel ───────────────────────────────────────────────────────────
+    if free_topic_mode:
+        num_judges = 0
+        st.session_state["num_judges"] = 0
+        st.caption("Free Topic Mode uses one philosopher team, so no pro/contra judge is shown.")
+    else:
+        st.markdown("<div style='height:0.3rem'></div>", unsafe_allow_html=True)
+        st.markdown("**Judge Panel**")
+        num_judges = st.radio(
+            "Number of Judges",
+            options=[1, 2, 3],
+            format_func=lambda n: f"{n} Judge{'s' if n > 1 else ''}",
+            horizontal=True,
+            key="num_judges",
+        )
+        focus_hints = [
+            "General evaluation across all metrics.",
+            "2 judges: Logic & Reasoning focus.",
+            "3 judges: Clarity & Communication focus.",
+        ]
+        jcols = st.columns(num_judges)
+        for i in range(num_judges):
+            with jcols[i]:
+                st.selectbox(
+                    judge_labels[i],
+                    options=model_keys,
+                    key=judge_keys[i],
+                    help=JUDGE_FOCUS[num_judges][i] or focus_hints[i],
+                )
+
     # ── Live model lineup (reads from session state updated by widgets above) ─
-    judge_roles = JUDGE_ROLE_LABELS[num_judges]
-    rows = (
-        f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-        f'<span style="color:#e8ecff;">{agent1_name} <span style="color:#aaa;font-size:0.8rem;">(For)</span></span>'
-        f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent1_model_label"]}</span>'
-        f'</div>'
-        f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-        f'<span style="color:#e8ecff;">{agent2_name} <span style="color:#aaa;font-size:0.8rem;">(Against)</span></span>'
-        f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent2_model_label"]}</span>'
-        f'</div>'
-    )
-    for i in range(num_judges):
-        rows += (
+    if free_topic_mode:
+        rows = (
             f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-            f'<span style="color:#e8ecff;">{judge_roles[i]} Judge</span>'
-            f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state[judge_keys[i]]}</span>'
+            f'<span style="color:#e8ecff;">{agent1_name} '
+            f'<span style="color:#aaa;font-size:0.8rem;">(Free Topic Team)</span></span>'
+            f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent1_model_label"]}</span>'
             f'</div>'
         )
+        team_configs = _team_configs_from_state()
+        rows += (
+            f'<div style="margin-top:8px;color:#8ecbff;font-size:0.72rem;'
+            f'text-transform:uppercase;letter-spacing:0.06em;">{TEAM_SIDE_LABELS["free"]}</div>'
+        )
+        for role_key, role_label, _fallback_key in TEAM_ROLE_DEFS:
+            role = team_configs["free"][role_key]
+            rows += (
+                f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
+                f'<span style="color:#e8ecff;">{role_label}: {role["philosopher_name"]}</span>'
+                f'<span style="color:#ffd54a;font-size:0.85rem;">{role["strategy"]}</span>'
+                f'</div>'
+            )
+    else:
+        judge_roles = JUDGE_ROLE_LABELS[num_judges]
+        rows = (
+            f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
+            f'<span style="color:#e8ecff;">{agent1_name} <span style="color:#aaa;font-size:0.8rem;">(For)</span></span>'
+            f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent1_model_label"]}</span>'
+            f'</div>'
+            f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
+            f'<span style="color:#e8ecff;">{agent2_name} <span style="color:#aaa;font-size:0.8rem;">(Against)</span></span>'
+            f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent2_model_label"]}</span>'
+            f'</div>'
+        )
+    if philosopher_teams and not free_topic_mode:
+        team_configs = _team_configs_from_state()
+        for side in TEAM_SIDE_KEYS:
+            rows += (
+                f'<div style="margin-top:8px;color:#8ecbff;font-size:0.72rem;'
+                f'text-transform:uppercase;letter-spacing:0.06em;">{TEAM_SIDE_LABELS[side]}</div>'
+            )
+            for role_key, role_label, _fallback_key in TEAM_ROLE_DEFS:
+                role = team_configs[side][role_key]
+                rows += (
+                    f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
+                    f'<span style="color:#e8ecff;">{role_label}: {role["philosopher_name"]}</span>'
+                    f'<span style="color:#ffd54a;font-size:0.85rem;">{role["strategy"]}</span>'
+                    f'</div>'
+                )
+    if not free_topic_mode:
+        for i in range(num_judges):
+            rows += (
+                f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
+                f'<span style="color:#e8ecff;">{judge_roles[i]} Judge</span>'
+                f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state[judge_keys[i]]}</span>'
+                f'</div>'
+            )
     st.markdown(
         f"""
         <div class="score-card" style="margin-top:14px;margin-bottom:4px;padding:10px 16px;">
@@ -1156,7 +1500,9 @@ def render_character_stage() -> None:
 def render_versus_stage() -> None:
     configs = current_agent_configs(use_saved_params=True)
     st.session_state["agent1_philosopher_name"] = configs[0]["philosopher_name"]
-    st.session_state["agent2_philosopher_name"] = configs[1]["philosopher_name"]
+    st.session_state["agent2_philosopher_name"] = (
+        configs[1]["philosopher_name"] if len(configs) > 1 else ""
+    )
     render_topic_panel(st.session_state["selected_topic"])
 
     st.markdown(
@@ -1191,14 +1537,18 @@ def handle_run_debate() -> None:
 
     # Prefer the stable _dp_ snapshot keys; fall back to display/widget keys if
     # called directly from render_arena_stage's safety net.
+    start_mode         = _current_start_mode()
+    free_topic_mode    = start_mode == "free"
     saved_configs      = current_agent_configs(use_saved_params=True)
     agent1_name        = saved_configs[0]["philosopher_name"]
-    agent2_name        = saved_configs[1]["philosopher_name"]
+    agent2_name        = saved_configs[1]["philosopher_name"] if len(saved_configs) > 1 else ""
     agent1_model_label = st.session_state.get("_dp_model1") or st.session_state.get("agent1_model_label", default_m)
     agent2_model_label = st.session_state.get("_dp_model2") or st.session_state.get("agent2_model_label", default_m)
     p1_strategy        = st.session_state.get("_dp_strat1") or st.session_state.get("player1_strategy", STRATEGY_OPTIONS[0])
     p2_strategy        = st.session_state.get("_dp_strat2") or st.session_state.get("player2_strategy", STRATEGY_OPTIONS[0])
     num_judges         = st.session_state.get("_dp_num_judges") or st.session_state.get("num_judges", 1)
+    if free_topic_mode:
+        num_judges = 0
     argument_rounds    = _valid_argument_rounds(
         st.session_state.get("_dp_rounds")
         or st.session_state.get("_pref_rounds")
@@ -1225,38 +1575,63 @@ def handle_run_debate() -> None:
         or st.session_state.get("audio_autoplay", False)
     )
     philosopher_teams  = bool(
+        free_topic_mode
+        or
         st.session_state.get("_dp_philosopher_teams")
         or st.session_state.get("_pref_philosopher_teams")
         or st.session_state.get("philosopher_teams", False)
     )
+    team_configs       = (
+        st.session_state.get("_dp_team_configs")
+        or st.session_state.get("_pref_team_configs")
+        or _team_configs_from_state()
+    )
 
     agent1_provider, agent1_model = MODEL_OPTIONS[agent1_model_label]
-    agent2_provider, agent2_model = MODEL_OPTIONS[agent2_model_label]
-
-    agent_configs = [
-        {
-            "philosopher_key": saved_configs[0]["philosopher_key"],
-            "philosopher_name": agent1_name,
-            "provider":    agent1_provider,
-            "model":       agent1_model,
-            "model_label": agent1_model_label,
-            "display_name": f"{agent1_name} (For)",
-        },
-        {
-            "philosopher_key": saved_configs[1]["philosopher_key"],
-            "philosopher_name": agent2_name,
-            "provider":    agent2_provider,
-            "model":       agent2_model,
-            "model_label": agent2_model_label,
-            "display_name": f"{agent2_name} (Against)",
-        },
-    ]
+    if free_topic_mode:
+        agent_configs = [
+            {
+                "philosopher_key": saved_configs[0]["philosopher_key"],
+                "philosopher_name": agent1_name,
+                "provider":    agent1_provider,
+                "model":       agent1_model,
+                "model_label": agent1_model_label,
+                "display_name": f"{agent1_name} (Free Topic)",
+                "side":        "Free Topic",
+                "goal":        "Explore the topic as a philosopher team without forcing a pro/contra debate.",
+                "team_config": team_configs.get("free", {}),
+            },
+        ]
+        player_strategies = [p1_strategy]
+    else:
+        agent2_provider, agent2_model = MODEL_OPTIONS[agent2_model_label]
+        agent_configs = [
+            {
+                "philosopher_key": saved_configs[0]["philosopher_key"],
+                "philosopher_name": agent1_name,
+                "provider":    agent1_provider,
+                "model":       agent1_model,
+                "model_label": agent1_model_label,
+                "display_name": f"{agent1_name} (For)",
+                "team_config": team_configs.get("for", {}),
+            },
+            {
+                "philosopher_key": saved_configs[1]["philosopher_key"],
+                "philosopher_name": agent2_name,
+                "provider":    agent2_provider,
+                "model":       agent2_model,
+                "model_label": agent2_model_label,
+                "display_name": f"{agent2_name} (Against)",
+                "team_config": team_configs.get("against", {}),
+            },
+        ]
+        player_strategies = [p1_strategy, p2_strategy]
 
     reset_token_usage()
     transcript = run_debate(
         st.session_state["selected_topic"],
         argument_rounds,
-        [p1_strategy, p2_strategy],
+        player_strategies,
         agent_configs,
         max_words=agent_max_words,
         team_mode=philosopher_teams,
@@ -1271,30 +1646,32 @@ def handle_run_debate() -> None:
         if turn.get("team_trace")
     ]
 
-    focuses     = JUDGE_FOCUS[num_judges]
-    role_labels = JUDGE_ROLE_LABELS[num_judges]
     judge_results: list = []
     judgments: list = []
-    for i in range(num_judges):
-        j_model_label = (
-            st.session_state.get(f"_dp_judge{i+1}_model")
-            or st.session_state.get(f"judge{i+1}_model_label", default_m)
-        )
-        j_provider, j_model = MODEL_OPTIONS[j_model_label]
-        j = judge_debate(
-            st.session_state["selected_topic"], transcript,
-            judge_provider=j_provider,
-            judge_model=j_model,
-            focus=focuses[i],
-        )
-        judgments.append(j)
-        judge_results.append({
-            "judgment":    j,
-            "model_label": j_model_label,
-            "role":        role_labels[i],
-        })
-
-    judgment = aggregate_judgments(judgments)
+    if free_topic_mode:
+        judgment = None
+    else:
+        focuses     = JUDGE_FOCUS[num_judges]
+        role_labels = JUDGE_ROLE_LABELS[num_judges]
+        for i in range(num_judges):
+            j_model_label = (
+                st.session_state.get(f"_dp_judge{i+1}_model")
+                or st.session_state.get(f"judge{i+1}_model_label", default_m)
+            )
+            j_provider, j_model = MODEL_OPTIONS[j_model_label]
+            j = judge_debate(
+                st.session_state["selected_topic"], transcript,
+                judge_provider=j_provider,
+                judge_model=j_model,
+                focus=focuses[i],
+            )
+            judgments.append(j)
+            judge_results.append({
+                "judgment":    j,
+                "model_label": j_model_label,
+                "role":        role_labels[i],
+            })
+        judgment = aggregate_judgments(judgments)
 
     if st.session_state.get("_pref_summary", False):
         s_model_label = st.session_state.get("_dp_judge1_model") or st.session_state.get("judge1_model_label", default_m)
@@ -1302,6 +1679,7 @@ def handle_run_debate() -> None:
         summary = summarize_debate(
             st.session_state["selected_topic"], transcript, judgment,
             judge_provider=s_provider, judge_model=s_model,
+            free_topic_mode=free_topic_mode,
         )
     else:
         summary = None
@@ -1312,6 +1690,7 @@ def handle_run_debate() -> None:
     st.session_state["summary"]       = summary
     st.session_state["topic"]         = st.session_state["selected_topic"]
     st.session_state["agent_configs"] = agent_configs
+    st.session_state["team_configs"]   = team_configs
     st.session_state["token_usage"]   = get_token_usage()
     st.session_state["team_traces"]   = team_traces
     st.session_state["team_mode_active"] = philosopher_teams
@@ -1341,6 +1720,7 @@ def render_arena_stage() -> None:
     judgment = st.session_state.get("judgment")
 
     topic = st.session_state.get("topic", st.session_state.get("selected_topic", ""))
+    free_topic_mode = _current_start_mode() == "free"
 
     # Participant model attribution — read directly from session state to avoid stale agent_configs
     phil1 = st.session_state.get("agent1_philosopher_name", "Player 1")
@@ -1348,16 +1728,24 @@ def render_arena_stage() -> None:
     label1 = st.session_state.get("agent1_model_label", "")
     label2 = st.session_state.get("agent2_model_label", "")
     if label1 or label2:
-        rows = (
-            f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-            f'<span style="color:#e8ecff;">{phil1} (For)</span>'
-            f'<span style="color:#ffd54a; font-size:0.85rem;">{label1}</span>'
-            f'</div>'
-            f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-            f'<span style="color:#e8ecff;">{phil2} (Against)</span>'
-            f'<span style="color:#ffd54a; font-size:0.85rem;">{label2}</span>'
-            f'</div>'
-        )
+        if free_topic_mode:
+            rows = (
+                f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
+                f'<span style="color:#e8ecff;">{phil1} (Free Topic Team)</span>'
+                f'<span style="color:#ffd54a; font-size:0.85rem;">{label1}</span>'
+                f'</div>'
+            )
+        else:
+            rows = (
+                f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
+                f'<span style="color:#e8ecff;">{phil1} (For)</span>'
+                f'<span style="color:#ffd54a; font-size:0.85rem;">{label1}</span>'
+                f'</div>'
+                f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
+                f'<span style="color:#e8ecff;">{phil2} (Against)</span>'
+                f'<span style="color:#ffd54a; font-size:0.85rem;">{label2}</span>'
+                f'</div>'
+            )
         st.markdown(
             f"""
             <div class="score-card" style="padding:8px 14px; margin-bottom:10px;">
