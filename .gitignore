@@ -3,3 +3,10 @@
 .env
 __pycache__/
 *.pyc
+
+# Video recordings
+*.webm
+*.mp4
+*.mov
+*.avi
+*.mkv

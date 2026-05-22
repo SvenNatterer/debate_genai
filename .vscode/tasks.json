@@ -1,0 +1,17 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Auto-Sync Screenshots",
+            "type": "shell",
+            "command": "~/scripts/sync_screenshot.sh",
+            "presentation": {
+                "reveal": "silent",
+                "panel": "shared",
+                "group": "screenshot-sync"
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        }
+    ]
+}

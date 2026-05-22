@@ -1,6 +1,8 @@
 import base64
 import html
 import json
+import re
+import concurrent.futures
 from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
@@ -48,16 +50,17 @@ METRIC_LABELS = {
 
 # Available models shown in the UI selector
 MODEL_OPTIONS = {
-    "Llama3.2:1b (Local)":            ("local", "llama3.2:1b"),
-    "Phi-4 mini  (Platform)":         ("custom", "Phi-4-mini-reasoning"),
-    "GPT-5-chat  (Platform)":         ("custom", "gpt-5-chat"),
+    "Llama3.2:3b (Local)":            ("local", "llama3.2"),
     "GPT-4.1 mini  (Platform)":       ("custom", "gpt-4.1-mini"),
+    "GPT-5-chat  (Platform)":         ("custom", "gpt-5-chat"),
     "DeepSeek-V3.2  (Platform)":      ("custom", "DeepSeek-V3.2"),
     "Mistral Large 3  (Platform)":    ("custom", "mistral-Large-3"),
     "Mistral Small  (Platform)":      ("custom", "mistral-small-2503"),
     "Llama 4 Maverick  (Platform)":   ("custom", "Llama-4-Maverick-17B-128E-Instruct-FP8"),
     "Llama 3.3 70B  (Platform)":      ("custom", "Llama-3.3-70B-Instruct"),
 }
+
+MODEL_DEFAULTS_VERSION = 2
 
 DEFAULT_AGENT_MAX_WORDS = 120
 MIN_AGENT_MAX_WORDS = 40
@@ -80,6 +83,13 @@ TEAM_ROLE_DEFS = (
 TEAM_DEFAULTS_VERSION = 3
 
 
+def _local_model_label() -> str:
+    return next(
+        (label for label, (provider, _) in MODEL_OPTIONS.items() if provider == "local"),
+        list(MODEL_OPTIONS.keys())[0],
+    )
+
+
 def image_to_data_uri(image_path: str) -> str:
     image_bytes = Path(image_path).read_bytes()
     encoded = base64.b64encode(image_bytes).decode("utf-8")
@@ -90,11 +100,11 @@ _DEBATE_PARAM_KEYS = [
     "_dp_strat1", "_dp_strat2", "_dp_num_judges",
     "_dp_judge1_model", "_dp_judge2_model", "_dp_judge3_model",
     "_dp_agent_configs", "_dp_agent_max_words", "_dp_rounds",
-    "_dp_developer_mode", "_dp_audio_output", "_dp_audio_autoplay",
+    "_dp_developer_mode", "_dp_audio_transcription", "_dp_speaker_speed",
     "_dp_philosopher_teams", "_dp_team_configs", "_dp_start_mode",
-    "_audio_debate_id", "_audio_autoplay_seen_id",
     "_character_stage_seeded",
     "_loading_screen_primed",
+    "_dp_max_review_attempts",
 ]
 
 
@@ -108,41 +118,60 @@ def reset_game() -> None:
     st.session_state["ui_agent2_philosopher_name"] = PHILOSOPHER_LIBRARY["nietzsche"]["name"]
     st.session_state["agent1_philosopher_name"] = PHILOSOPHER_LIBRARY["socrates"]["name"]
     st.session_state["agent2_philosopher_name"] = PHILOSOPHER_LIBRARY["nietzsche"]["name"]
-    _default_model = list(MODEL_OPTIONS.keys())[0]
-    st.session_state.setdefault("agent1_model_label",  _default_model)
-    st.session_state.setdefault("agent2_model_label",  _default_model)
-    st.session_state.setdefault("judge1_model_label",  _default_model)
-    st.session_state.setdefault("judge2_model_label",  _default_model)
-    st.session_state.setdefault("judge3_model_label",  _default_model)
+    default_model = _local_model_label()
+    st.session_state["agent1_model_label"] = default_model
+    st.session_state["agent2_model_label"] = default_model
+    st.session_state["judge1_model_label"] = default_model
+    st.session_state["judge2_model_label"] = default_model
+    st.session_state["judge3_model_label"] = default_model
+    st.session_state["summary_model_label"] = default_model
+    st.session_state["_pref_summary_model"] = default_model
+    st.session_state["_model_defaults_version"] = MODEL_DEFAULTS_VERSION
     st.session_state.setdefault("num_judges", 1)
     st.session_state["agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
     st.session_state["developer_mode"] = False
-    st.session_state["audio_output"] = False
-    st.session_state["audio_autoplay"] = False
+    st.session_state["audio_transcription"] = True
+    st.session_state["speaker_speed"] = 1.0
     st.session_state["philosopher_teams"] = False
     st.session_state["start_mode"] = "single"
+    st.session_state["team_max_review_attempts"] = 3
     st.session_state["free_topic_input"] = ""
     _reset_team_mode_defaults()
 
-    st.session_state["_pref_summary"] = False  # reset to default on new game
+    # summary is always enabled — no preference needed
     st.session_state["_pref_agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
     st.session_state["_pref_rounds"] = DEFAULT_ARGUMENT_ROUNDS
     st.session_state["_pref_developer_mode"] = False
-    st.session_state["_pref_audio_output"] = False
-    st.session_state["_pref_audio_autoplay"] = False
+    st.session_state["_pref_audio_transcription"] = True
+    st.session_state["_pref_speaker_speed"] = 1.0
     st.session_state["_pref_philosopher_teams"] = False
     st.session_state["_pref_start_mode"] = "single"
     st.session_state["_pref_team_configs"] = _team_configs_from_state()
 
     for key in [
         "transcript", "judgment", "judge_results", "summary", "topic", "agent_configs",
-        "token_usage", "team_traces", "team_mode_active", "team_configs",
+        "token_usage", "team_traces", "team_mode_active", "team_configs", "judge_step",
         *_DEBATE_PARAM_KEYS,
     ]:
         st.session_state.pop(key, None)
 
 
-def _save_debate_params(agent1_name: str | None = None, agent2_name: str | None = None) -> None:
+def _valid_model_label(value: object, fallback: object | None = None) -> str:
+    model_keys = list(MODEL_OPTIONS.keys())
+    if isinstance(value, str) and value in MODEL_OPTIONS:
+        return value
+    if isinstance(fallback, str) and fallback in MODEL_OPTIONS:
+        return fallback
+    return model_keys[0]
+
+
+def _save_debate_params(
+    agent1_name: str | None = None,
+    agent2_name: str | None = None,
+    agent1_model_label: str | None = None,
+    agent2_model_label: str | None = None,
+    judge_model_labels: list[str] | None = None,
+) -> None:
     """Copy live widget values to stable keys before a stage transition.
 
     Widget-bound keys are disowned by Streamlit when their widget isn't rendered,
@@ -168,8 +197,12 @@ def _save_debate_params(agent1_name: str | None = None, agent2_name: str | None 
             st.session_state["_dp_phil1"],
             st.session_state["_dp_phil2"],
         )
-    st.session_state["_dp_model1"]      = st.session_state.get("agent1_model_label", default_m)
-    st.session_state["_dp_model2"]      = st.session_state.get("agent2_model_label", default_m)
+    st.session_state["_dp_model1"]      = _valid_model_label(
+        agent1_model_label, st.session_state.get("agent1_model_label", default_m)
+    )
+    st.session_state["_dp_model2"]      = _valid_model_label(
+        agent2_model_label, st.session_state.get("agent2_model_label", default_m)
+    )
     st.session_state["_dp_strat1"]      = st.session_state.get("player1_strategy", STRATEGY_OPTIONS[0])
     st.session_state["_dp_strat2"]      = st.session_state.get("player2_strategy", STRATEGY_OPTIONS[0])
     st.session_state["_dp_agent_max_words"] = _valid_agent_max_words(
@@ -184,26 +217,36 @@ def _save_debate_params(agent1_name: str | None = None, agent2_name: str | None 
         st.session_state.get("_pref_developer_mode")
         or st.session_state.get("developer_mode", False)
     )
-    st.session_state["_dp_audio_output"] = bool(
-        st.session_state.get("_pref_audio_output")
-        or st.session_state.get("audio_output", False)
+    st.session_state["_dp_audio_transcription"] = _session_bool(
+        "_pref_audio_transcription",
+        "audio_transcription",
+        default=True,
     )
-    st.session_state["_dp_audio_autoplay"] = bool(
-        st.session_state.get("_pref_audio_autoplay")
-        or st.session_state.get("audio_autoplay", False)
+    st.session_state["_dp_speaker_speed"] = float(
+        st.session_state.get("_pref_speaker_speed")
+        or st.session_state.get("speaker_speed", 1.0)
+        or 1.0
     )
     st.session_state["_dp_philosopher_teams"] = bool(
         st.session_state.get("_pref_philosopher_teams")
         or st.session_state.get("philosopher_teams", False)
+    )
+    st.session_state["_dp_max_review_attempts"] = int(
+        st.session_state.get("_pref_team_max_review_attempts")
+        or st.session_state.get("team_max_review_attempts", 3)
     )
     team_configs = _team_configs_from_state()
     st.session_state["_pref_team_configs"] = team_configs
     st.session_state["_dp_team_configs"] = team_configs
     num_j = 0 if start_mode == "free" else st.session_state.get("num_judges", 1)
     st.session_state["_dp_num_judges"]  = num_j
+    st.session_state["_dp_summary_model"] = st.session_state.get("summary_model_label", default_m)
+    judge_model_labels = judge_model_labels or []
     for i in range(3):
-        st.session_state[f"_dp_judge{i+1}_model"] = st.session_state.get(
-            f"judge{i+1}_model_label", default_m
+        live_judge_model = judge_model_labels[i] if i < len(judge_model_labels) else None
+        st.session_state[f"_dp_judge{i+1}_model"] = _valid_model_label(
+            live_judge_model,
+            st.session_state.get(f"judge{i+1}_model_label", default_m),
         )
 
 
@@ -228,20 +271,31 @@ def ensure_session_state() -> None:
     st.session_state.setdefault(
         "agent2_philosopher_name", st.session_state["ui_agent2_philosopher_name"]
     )
-    _default_model = list(MODEL_OPTIONS.keys())[0]
-    st.session_state.setdefault("agent1_model_label",  _default_model)
-    st.session_state.setdefault("agent2_model_label",  _default_model)
-    st.session_state.setdefault("judge1_model_label",  _default_model)
-    st.session_state.setdefault("judge2_model_label",  _default_model)
-    st.session_state.setdefault("judge3_model_label",  _default_model)
+    default_model = _local_model_label()
+    model_label_keys = [
+        "agent1_model_label",
+        "agent2_model_label",
+        "judge1_model_label",
+        "judge2_model_label",
+        "judge3_model_label",
+        "summary_model_label",
+        "_pref_summary_model",
+    ]
+    if st.session_state.get("_model_defaults_version") != MODEL_DEFAULTS_VERSION:
+        for key in model_label_keys:
+            st.session_state[key] = default_model
+        st.session_state["_model_defaults_version"] = MODEL_DEFAULTS_VERSION
+    for key in model_label_keys:
+        st.session_state.setdefault(key, default_model)
     st.session_state.setdefault("num_judges", 1)
-    st.session_state.setdefault("include_summary", False)
+    # include_summary removed — summary is always generated
     st.session_state.setdefault("agent_max_words", DEFAULT_AGENT_MAX_WORDS)
     st.session_state.setdefault("developer_mode", False)
-    st.session_state.setdefault("audio_output", False)
-    st.session_state.setdefault("audio_autoplay", False)
+    st.session_state.setdefault("audio_transcription", True)
+    st.session_state.setdefault("speaker_speed", 1.0)
     st.session_state.setdefault("philosopher_teams", False)
     st.session_state.setdefault("start_mode", "single")
+    st.session_state.setdefault("team_max_review_attempts", 3)
     st.session_state.setdefault("free_topic_input", "")
     if (
         st.session_state.get("philosopher_teams")
@@ -250,13 +304,14 @@ def ensure_session_state() -> None:
         _reset_team_mode_defaults()
     else:
         _ensure_team_mode_defaults()
-    st.session_state.setdefault("_pref_summary", False)
+    # summary is always enabled — no preference key needed
     st.session_state.setdefault("_pref_agent_max_words", DEFAULT_AGENT_MAX_WORDS)
     st.session_state.setdefault("_pref_rounds", DEFAULT_ARGUMENT_ROUNDS)
     st.session_state.setdefault("_pref_developer_mode", False)
-    st.session_state.setdefault("_pref_audio_output", False)
-    st.session_state.setdefault("_pref_audio_autoplay", False)
+    st.session_state.setdefault("_pref_audio_transcription", True)
+    st.session_state.setdefault("_pref_speaker_speed", 1.0)
     st.session_state.setdefault("_pref_philosopher_teams", False)
+    st.session_state.setdefault("_pref_team_max_review_attempts", 3)
     st.session_state.setdefault("_pref_start_mode", "single")
     st.session_state.setdefault("_pref_team_configs", _team_configs_from_state())
 
@@ -272,6 +327,18 @@ def _valid_philosopher_name(value: str | None, fallback_key: str) -> str:
     return fallback_name
 
 
+def get_judge_image_path(role: str) -> str:
+    role_lower = str(role or "").lower()
+    if "logic" in role_lower:
+        return "images/Judge_Logic.png"
+    elif "debate" in role_lower:
+        return "images/Judge_Debate.png"
+    elif "clarity" in role_lower:
+        return "images/Judge_Clarity.png"
+    else:
+        return "images/Judge_General.png"
+
+
 def _current_start_mode() -> str:
     mode = (
         st.session_state.get("_dp_start_mode")
@@ -280,6 +347,13 @@ def _current_start_mode() -> str:
         or "single"
     )
     return mode if mode in {"single", "team", "free"} else "single"
+
+
+def _session_bool(*keys: str, default: bool = False) -> bool:
+    for key in keys:
+        if key in st.session_state:
+            return bool(st.session_state[key])
+    return default
 
 
 def _philosopher_name_from_key(key: str) -> str:
@@ -459,6 +533,9 @@ def render_mode_status(cloud_active: bool, status_message: str | None = None) ->
 
 
 def render_top_bar() -> None:
+    if st.session_state.get("stage") == 3:
+        return
+
     top_col1, top_col2 = st.columns([3, 1])
     with top_col1:
         st.empty()
@@ -468,16 +545,27 @@ def render_top_bar() -> None:
             st.rerun()
 
 
-def render_topic_panel(topic: str) -> None:
-    st.markdown(
-        f"""
-        <div class="topic-panel">
-            <div class="topic-label">Debate Topic</div>
-            <div class="topic-text">{topic}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def render_topic_panel(topic: str, small: bool = False) -> None:
+    if small:
+        st.markdown(
+            f"""
+            <div class="topic-panel small-topic-panel">
+                <div class="topic-label small-topic-label">Debate Topic:</div>
+                <div class="topic-text small-topic-text">{topic}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f"""
+            <div class="topic-panel">
+                <div class="topic-label">Debate Topic:</div>
+                <div class="topic-text">{topic}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_fighter_card(philosopher_key: str, side_label: str) -> None:
@@ -497,7 +585,7 @@ def render_fighter_card(philosopher_key: str, side_label: str) -> None:
     )
 
 def _build_scores_html(scores: dict) -> str:
-    """Return score cards as an HTML string (safe to inline in a single st.markdown call).
+    """Return a score table as an HTML string.
 
     Handles both the new metric keys (logical_validity, …) and any legacy or
     unexpected format the model might return — nothing is silently dropped.
@@ -506,27 +594,336 @@ def _build_scores_html(scores: dict) -> str:
         "logic": "Logic", "relevance": "Relevance",
         "rebuttal": "Rebuttal", "fairness": "Fairness",
     }
-    parts = []
+    if not scores:
+        return ""
+
+    def score_text(value: object, key: str) -> str:
+        if value in (None, ""):
+            return "-"
+        if isinstance(value, (int, float)):
+            denominator = 50 if key == "total" else 10
+            number = int(value) if float(value).is_integer() else value
+            return f"{number}/{denominator}"
+        value_str = str(value).strip()
+        if not value_str:
+            return "-"
+        if "/" in value_str:
+            return html.escape(value_str)
+        if re.fullmatch(r"\d+(?:[.,]\d+)?", value_str):
+            denominator = 50 if key == "total" else 10
+            return f"{html.escape(value_str)}/{denominator}"
+        return html.escape(value_str)
+
+    metric_keys = list(METRIC_LABELS.keys())
+    header_cells = "".join(
+        f'<th style="padding:9px 10px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.16);">{label}</th>'
+        for label in ["Speaker", *METRIC_LABELS.values()]
+    )
+    rows = []
     for name, vals in scores.items():
+        if not isinstance(vals, dict):
+            rows.append(
+                f'<tr>'
+                f'<td style="padding:9px 10px;font-weight:800;color:white;">{html.escape(str(name))}</td>'
+                f'<td colspan="{len(metric_keys)}" style="padding:9px 10px;">{html.escape(str(vals))}</td>'
+                f'</tr>'
+            )
+            continue
+
         has_new_keys = any(k in METRIC_LABELS for k in vals)
         if has_new_keys:
-            rows = "".join(
-                f'<div>{label}: {vals.get(key, "-")}</div>'
-                for key, label in METRIC_LABELS.items()
+            # Auto-calculate total if the model didn't provide one
+            score_keys = [k for k in metric_keys if k != "total"]
+            if not vals.get("total"):
+                def _extract_num(v: object) -> float | None:
+                    if isinstance(v, (int, float)):
+                        return float(v)
+                    s = str(v or "").strip()
+                    m = re.match(r"(\d+(?:[.,]\d+)?)", s)
+                    return float(m.group(1).replace(",", ".")) if m else None
+                nums = [_extract_num(vals.get(k)) for k in score_keys]
+                if all(n is not None for n in nums):
+                    vals = dict(vals)  # don't mutate the original
+                    vals["total"] = int(sum(nums))  # type: ignore[assignment]
+            cells = "".join(
+                f'<td style="padding:9px 10px;">{score_text(vals.get(key), key)}</td>'
+                for key in metric_keys
             )
         else:
             # Fall back to whatever the model returned (old or unexpected format)
-            rows = "".join(
-                f'<div>{_fallback_labels.get(k, k.replace("_", " ").title())}: {v}</div>'
+            fallback_text = "<br>".join(
+                f'{html.escape(_fallback_labels.get(k, k.replace("_", " ").title()))}: {html.escape(str(v))}'
                 for k, v in vals.items()
             )
-        parts.append(
-            f'<div class="score-card">'
-            f'<div class="score-name">{name}</div>'
-            f'<div class="score-grid">{rows}</div>'
-            f'</div>'
+            cells = f'<td colspan="{len(metric_keys)}" style="padding:9px 10px;">{fallback_text}</td>'
+        rows.append(
+            f'<tr style="border-bottom:1px solid rgba(255,255,255,0.10);">'
+            f'<td style="padding:9px 10px;font-weight:800;color:white;">{html.escape(str(name))}</td>'
+            f'{cells}'
+            f'</tr>'
         )
-    return "".join(parts)
+
+    body_rows = "".join(rows)
+    return (
+        '<div style="overflow-x:auto;margin-top:12px;">'
+        '<table style="width:100%;border-collapse:collapse;color:#e8ecff;font-size:0.9rem;'
+        'background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.14);">'
+        f'<thead><tr style="color:#ffd54a;background:rgba(255,255,255,0.05);">{header_cells}</tr></thead>'
+        f'<tbody>{body_rows}</tbody>'
+        '</table>'
+        '</div>'
+    )
+
+
+def _format_score_value(score: str, denominator: str) -> str:
+    score = score.replace(",", ".").strip()
+    try:
+        score_num = float(score)
+        score = str(int(score_num)) if score_num.is_integer() else str(score_num)
+    except ValueError:
+        pass
+    return f"{score}/{denominator}"
+
+
+def _speaker_aliases(speaker: str) -> list[str]:
+    base_name = re.sub(r"\s*\([^)]*\)", "", speaker).strip()
+    aliases = [speaker]
+    if base_name and base_name != speaker:
+        aliases.append(base_name)
+    return aliases
+
+
+def _speaker_score_segment(text: str, speaker: str, speakers: list[str]) -> str:
+    start_match = None
+    for alias in _speaker_aliases(speaker):
+        match = re.search(rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]", text, re.IGNORECASE)
+        if match and (start_match is None or match.start() < start_match.start()):
+            start_match = match
+    if not start_match:
+        return ""
+
+    start = start_match.end()
+    end = len(text)
+    for other in speakers:
+        if other == speaker:
+            continue
+        for alias in _speaker_aliases(other):
+            match = re.search(rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]", text[start:], re.IGNORECASE)
+            if match:
+                end = min(end, start + match.start())
+
+    marker = re.search(
+        r"\b(?:Begr(?:ü|u)ndung|Justification|Reasoning|Winner)\s*:",
+        text[start:],
+        re.IGNORECASE,
+    )
+    if marker:
+        end = min(end, start + marker.start())
+
+    return text[start:end]
+
+
+def _parse_scores_from_segment(segment: str) -> dict:
+    metric_aliases = {
+        "logical_validity": ["logical validity", "logische gültigkeit", "logische gueltigkeit", "logic"],
+        "argument_strength": ["argument strength", "argumentationsstärke", "argumentationsstaerke", "argument strength"],
+        "counterargument_handling": ["counterargument handling", "counterargument", "gegenargument"],
+        "clarity": ["clarity", "klarheit"],
+        "relevance": ["relevance", "relevanz"],
+    }
+    scores = {}
+    for key, aliases in metric_aliases.items():
+        for alias in aliases:
+            label_re = re.escape(alias).replace(r"\ ", r"\s+")
+            patterns = [
+                rf"(\d+(?:[\.,]\d+)?)\s*(?:/\s*(10|50))?\s*(?:[-–—:=]|\bfor\b|\bin\b|\bof\b|\()?\s*{label_re}",
+                rf"{label_re}\s*(?:[-–—:=]|\bfor\b|\bin\b|\bof\b|\()?\s*(\d+(?:[\.,]\d+)?)\s*(?:/\s*(10|50))?\b",
+            ]
+            match = None
+            for pattern in patterns:
+                m = re.search(pattern, segment, re.IGNORECASE)
+                if m:
+                    score = m.group(1)
+                    denom = m.group(2) or "10"
+                    scores[key] = _format_score_value(score, denom)
+                    match = m
+                    break
+            if match:
+                break
+
+    # Robust total parser allowing totaling/totalling/overall/etc.
+    total_match = re.search(
+        r"\b(?:total(?:ing|ling|ed)?|overall|gesamt(?:punktzahl)?)\s*(?:[-–—:=]|\bfor\b|\bin\b|\bof\b|\()?\s*(\d+(?:[\.,]\d+)?)\s*(?:/\s*(50|10))?\b",
+        segment,
+        re.IGNORECASE,
+    )
+    if not total_match:
+        total_match = re.search(
+            r"(\d+(?:[\.,]\d+)?)\s*(?:/\s*(50|10))?\s*(?:[-–—:=]|\bfor\b|\bin\b|\bof\b|\()?\s*\b(?:total(?:ing|ling|ed)?|overall|gesamt(?:punktzahl)?)\b",
+            segment,
+            re.IGNORECASE,
+        )
+    if total_match:
+        scores["total"] = _format_score_value(total_match.group(1), total_match.group(2) or "50")
+
+    # Fallback: if no individual metric scores were found, OR only one was found (which often happens when a single score is followed by a list of metrics like "8/10 for logical validity, argument strength..."),
+    # try to assign matches or propagate.
+    individual_keys = [k for k in METRIC_LABELS if k != "total"]
+    found_keys = [k for k in individual_keys if k in scores]
+    
+    if len(found_keys) <= 1:
+        # Find all numbers in the segment that could be scores
+        matches = list(re.finditer(r"(\d+(?:[\.,]\d+)?)(?:\s*/\s*(10|50)\b)?", segment))
+        valid_matches = []
+        for m in matches:
+            val_str = m.group(1).replace(",", ".")
+            try:
+                val = float(val_str)
+                denom = m.group(2) or "10"
+                # Exclude total scores if they are explicitly /50
+                if denom == "50":
+                    continue
+                if 0 <= val <= 10:
+                    valid_matches.append(m)
+            except ValueError:
+                pass
+        
+        # If there's only one unique score number, propagate it to all individual metrics
+        if len(valid_matches) == 1:
+            single_val = valid_matches[0].group(1)
+            for key in individual_keys:
+                scores[key] = _format_score_value(single_val, "10")
+            if "total" not in scores:
+                try:
+                    val_num = float(single_val.replace(",", "."))
+                    scores["total"] = _format_score_value(str(val_num * 5), "50")
+                except ValueError:
+                    scores["total"] = _format_score_value(single_val, "10")
+        elif len(valid_matches) > 1:
+            # Map multiple numbers positionally
+            for key, match in zip(individual_keys, valid_matches):
+                scores[key] = _format_score_value(match.group(1), "10")
+
+    return scores
+
+
+def parse_judge_scores(text: str, transcript: list[dict]) -> dict:
+    speakers = []
+    for turn in transcript:
+        speaker = str(turn.get("speaker", "")).strip()
+        if speaker and speaker not in speakers:
+            speakers.append(speaker)
+
+    parsed = {}
+    for speaker in speakers:
+        segment = _speaker_score_segment(text, speaker, speakers)
+        if not segment:
+            continue
+        scores = _parse_scores_from_segment(segment)
+        if scores:
+            parsed[speaker] = scores
+    return parsed
+
+
+def clean_judge_reasoning(text: str, transcript: list[dict]) -> str:
+    cleaned = re.sub(r"<think>.*?</think>", "", str(text), flags=re.DOTALL).strip()
+    
+    # 1. Try robust extraction first: find all Begründung/Justification/Reasoning blocks
+    pattern = r"(?is)\b(Begr(?:ü|u)ndung|Justification|Reasoning)\s*:\s*(.*?)(?=\n\s*[A-Z][a-zA-Z\s]+(?:\([^)]*\))?\s*[:\-–—=]|\n\s*Winner\s*:|$)"
+    matches = re.findall(pattern, cleaned)
+    
+    if matches:
+        blocks = []
+        for marker, content in matches:
+            content_cleaned = content.strip()
+            content_cleaned = re.sub(r"(?is)\n?\s*winner\s*:.*$", "", content_cleaned).strip()
+            blocks.append(f"{marker}: {content_cleaned}")
+        return "\n\n".join(blocks).strip()
+
+    # 2. Fallback to original speaker-based clean logic
+    # Identify and extract speaker names/aliases to find their score segments
+    speakers = []
+    for turn in transcript:
+        speaker = str(turn.get("speaker", "")).strip()
+        if speaker and speaker not in speakers:
+            speakers.append(speaker)
+
+    # Find and remove the score block for each speaker
+    ranges = []
+    for speaker in speakers:
+        start_match = None
+        for alias in _speaker_aliases(speaker):
+            match = re.search(rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]", cleaned, re.IGNORECASE)
+            if match and (start_match is None or match.start() < start_match.start()):
+                start_match = match
+        if not start_match:
+            continue
+
+        start = start_match.end()
+        end = len(cleaned)
+        for other in speakers:
+            if other == speaker:
+                continue
+            for alias in _speaker_aliases(other):
+                match = re.search(rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]", cleaned[start:], re.IGNORECASE)
+                if match:
+                    end = min(end, start + match.start())
+
+        marker = re.search(
+            r"\b(?:Begr(?:ü|u)ndung|Justification|Reasoning|Winner)\s*:",
+            cleaned[start:],
+            re.IGNORECASE,
+        )
+        if marker:
+            end = min(end, start + marker.start())
+
+        ranges.append((start_match.start(), end))
+
+    # Sort ranges in descending order to avoid offset shifting issues during removal
+    ranges.sort(key=lambda r: r[0], reverse=True)
+    for start, end in ranges:
+        cleaned = cleaned[:start] + cleaned[end:]
+
+    # Now search for the main reasoning marker and slice from it
+    marker = re.search(
+        r"\b(?:Begr(?:ü|u)ndung|Justification|Reasoning)\s*:",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if marker:
+        cleaned = cleaned[marker.start():]
+    else:
+        aliases = [
+            alias.lower()
+            for turn in transcript
+            for alias in _speaker_aliases(str(turn.get("speaker", "")))
+            if alias
+        ]
+        lines = []
+        for line in cleaned.splitlines():
+            lower_line = line.lower()
+            has_score = bool(re.search(r"\d+(?:[\.,]\d+)?\s*/\s*\d+", line))
+            has_speaker = any(alias in lower_line for alias in aliases)
+            if has_score and has_speaker:
+                continue
+            lines.append(line)
+        cleaned = "\n".join(lines).strip()
+
+    cleaned = re.sub(r"(?is)\n?\s*winner\s*:.*$", "", cleaned).strip()
+    return cleaned
+
+
+
+def render_judge_result_body(judgment: dict) -> None:
+    reasoning = judgment.get("reasoning", "")
+    scores_html = _build_scores_html(judgment.get("scores", {}))
+    reasoning_html = (
+        f'<div style="color:#e8ecff;line-height:1.6;font-size:0.95rem;margin-bottom:12px;">'
+        f'{_markdown_to_html(reasoning)}'
+        f'</div>'
+        if reasoning else ""
+    )
+    st.markdown(f"{reasoning_html}{scores_html}", unsafe_allow_html=True)
 
 
 def _build_token_usage_html(entries: list[dict]) -> str:
@@ -544,40 +941,43 @@ def _build_token_usage_html(entries: list[dict]) -> str:
     total_prompt = sum(int(entry.get("prompt_tokens", 0)) for entry in entries)
     total_completion = sum(int(entry.get("completion_tokens", 0)) for entry in entries)
     total = sum(int(entry.get("total_tokens", 0)) for entry in entries)
+    has_estimates = any(entry.get("estimated") for entry in entries)
+
+    def token_label(value: int, estimated: bool = False) -> str:
+        prefix = "≈" if estimated else ""
+        return f"{prefix}{int(value)}"
 
     rows = "".join(
         "<tr>"
         f"<td>{_html.escape(str(entry.get('call', 'Model call')))}</td>"
         f"<td>{_html.escape(str(entry.get('model', '')))}</td>"
-        f"<td>{int(entry.get('prompt_tokens', 0))}</td>"
-        f"<td>{int(entry.get('completion_tokens', 0))}</td>"
-        f"<td>{int(entry.get('total_tokens', 0))}</td>"
+        f"<td>{token_label(entry.get('prompt_tokens', 0), bool(entry.get('estimated')))}</td>"
+        f"<td>{token_label(entry.get('completion_tokens', 0), bool(entry.get('estimated')))}</td>"
+        f"<td>{token_label(entry.get('total_tokens', 0), bool(entry.get('estimated')))}</td>"
         "</tr>"
         for entry in entries
     )
 
-    return f"""
-        <div class="score-card">
-            <div class="score-grid" style="margin-bottom:12px;">
-                <div>Prompt: {total_prompt}</div>
-                <div>Completion: {total_completion}</div>
-                <div>Total: {total}</div>
-                <div>Calls: {len(entries)}</div>
-            </div>
-            <table style="width:100%; border-collapse:collapse; color:#e8ecff; font-size:0.82rem;">
-                <thead>
-                    <tr style="color:#8ecbff; text-align:left;">
-                        <th style="padding:6px 4px;">Call</th>
-                        <th style="padding:6px 4px;">Model</th>
-                        <th style="padding:6px 4px;">Prompt</th>
-                        <th style="padding:6px 4px;">Completion</th>
-                        <th style="padding:6px 4px;">Total</th>
-                    </tr>
-                </thead>
-                <tbody>{rows}</tbody>
-            </table>
-        </div>
-    """
+    return (
+        f'<div class="score-card">'
+        f'<div class="score-grid" style="margin-bottom:12px;">'
+        f'<div>Prompt: {token_label(total_prompt, has_estimates)}</div>'
+        f'<div>Completion: {token_label(total_completion, has_estimates)}</div>'
+        f'<div>Total: {token_label(total, has_estimates)}</div>'
+        f'<div>Calls: {len(entries)}</div>'
+        f'</div>'
+        f'<table style="width:100%; border-collapse:collapse; color:#e8ecff; font-size:0.82rem;">'
+        f'<thead><tr style="color:#8ecbff; text-align:left;">'
+        f'<th style="padding:6px 4px;">Call</th>'
+        f'<th style="padding:6px 4px;">Model</th>'
+        f'<th style="padding:6px 4px;">Prompt</th>'
+        f'<th style="padding:6px 4px;">Completion</th>'
+        f'<th style="padding:6px 4px;">Total</th>'
+        f'</tr></thead>'
+        f'<tbody>{rows}</tbody>'
+        f'</table>'
+        f'</div>'
+    )
 
 
 def _dev_text(value: object, limit: int = 900) -> str:
@@ -710,22 +1110,22 @@ def render_development_panel() -> None:
 
     team_mode = bool(st.session_state.get("team_mode_active", False))
     team_status = "Enabled" if team_mode else "Disabled"
+    
+    # Only show the internals label if we are in team mode
+    internals_label = " • Team Internals Active" if team_mode else ""
 
-    st.markdown(
-        f"""
-        <div class="arcade-panel" style="margin-top:8px; margin-bottom:18px;">
-            <div class="topic-label">Development</div>
-            <div class="score-card">
-                <div class="score-grid">
-                    <div>Team Mode: {team_status}</div>
-                    <div>Team Internals: Reasoning summaries</div>
-                </div>
-            </div>
-            {_build_token_usage_html(st.session_state.get("token_usage", []))}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    # Build the panel HTML carefully to avoid markdown triggers
+    # We use a very simple structure to ensure it doesn't break
+    panel_html = (
+        f'<div class="arcade-panel" style="margin-top:8px; margin-bottom:18px;">'
+        f'<div class="topic-label">Development{internals_label}</div>'
+        f'<div style="color:#aaa; font-size:0.9rem; margin-bottom:12px;">'
+        f'Team Mode: <span style="color:#fff;">{team_status}</span>'
+        f'</div>'
+        f'{_build_token_usage_html(st.session_state.get("token_usage", []))}'
+        f'</div>'
     )
+    st.markdown(panel_html, unsafe_allow_html=True)
     if team_mode:
         render_team_traces_panel(st.session_state.get("team_traces", []))
 
@@ -733,28 +1133,24 @@ def render_development_panel() -> None:
 def _html_text(value: object) -> str:
     return html.escape(str(value)).replace("\n", "<br>")
 
+def _markdown_to_html(text: str) -> str:
+    text_str = str(text)
+    try:
+        from markdown_it import MarkdownIt
+        md = MarkdownIt("commonmark", {"breaks": True, "html": False})
+        return md.render(text_str)
+    except ImportError:
+        return html.escape(text_str).replace("\n", "<br>")
+
 
 def _json_for_script(value: object) -> str:
     return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
-
-
-def _estimate_audio_panel_height(transcript: list[dict]) -> int:
-    if not transcript:
-        return 290
-
-    card_heights = []
-    for turn in transcript:
-        text_length = len(str(turn.get("text", "")))
-        card_heights.append(max(170, min(520, 120 + int(text_length * 0.42))))
-    return min(2200, 180 + sum(card_heights))
 
 
 def render_debate_text_panel(topic: str, transcript: list[dict] | None) -> None:
     st.markdown(
         f"""
         <div class="arcade-panel" style="margin-bottom:18px;">
-            <div class="topic-label">Debate Chat</div>
-            <div class="topic-text">{_html_text(topic)}</div>
         """,
         unsafe_allow_html=True,
     )
@@ -765,7 +1161,7 @@ def render_debate_text_panel(topic: str, transcript: list[dict] | None) -> None:
                 f"""
                 <div class="score-card">
                     <div class="score-name">{_html_text(turn['speaker'])}</div>
-                    <div style="color:#e8ecff; line-height:1.6;">{_html_text(turn['text'])}</div>
+                    <div class="turn-text" style="color:#e8ecff; line-height:1.6;">{_markdown_to_html(turn['text'])}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -781,288 +1177,6 @@ def render_debate_text_panel(topic: str, transcript: list[dict] | None) -> None:
         )
 
     st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_debate_audio_panel(
-    topic: str,
-    transcript: list[dict] | None,
-    autoplay: bool = False,
-) -> None:
-    turns = [
-        {
-            "speaker": str(turn.get("speaker", "Speaker")),
-            "text": str(turn.get("text", "")),
-        }
-        for turn in (transcript or [])
-    ]
-
-    if not turns:
-        render_debate_text_panel(topic, transcript)
-        return
-
-    cards_html = "".join(
-        f"""
-        <article class="score-card">
-            <div class="turn-heading">
-                <div class="score-name">{_html_text(turn["speaker"])}</div>
-                <button class="audio-button" type="button" data-turn="{index}"
-                        title="Argument vorlesen" aria-label="Argument vorlesen">
-                    ▶ Play
-                </button>
-            </div>
-            <div class="turn-text">{_html_text(turn["text"])}</div>
-        </article>
-        """
-        for index, turn in enumerate(turns)
-    )
-
-    panel_html = """
-    <!doctype html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;800;900&display=swap');
-
-            html, body {
-                margin: 0;
-                background: transparent;
-                color: white;
-                font-family: 'Orbitron', sans-serif;
-            }
-
-            .arcade-panel {
-                box-sizing: border-box;
-                background: rgba(255,255,255,0.05);
-                border: 2px solid rgba(255,255,255,0.14);
-                border-radius: 22px;
-                padding: 24px;
-                box-shadow: 0 0 25px rgba(0,0,0,0.35);
-                backdrop-filter: blur(10px);
-            }
-
-            .topic-label {
-                font-size: 0.95rem;
-                text-transform: uppercase;
-                letter-spacing: 3px;
-                opacity: 0.8;
-                margin-bottom: 14px;
-                color: #8ecbff;
-                font-weight: 700;
-            }
-
-            .topic-text {
-                font-size: 1.85rem;
-                font-weight: 800;
-                line-height: 1.35;
-                color: white;
-                margin-bottom: 16px;
-            }
-
-            .audio-toolbar {
-                display: flex;
-                align-items: center;
-                flex-wrap: wrap;
-                gap: 10px;
-                margin-bottom: 16px;
-            }
-
-            .audio-status {
-                color: #cfd8ff;
-                font-size: 0.82rem;
-                opacity: 0.85;
-            }
-
-            .score-card {
-                box-sizing: border-box;
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.14);
-                border-radius: 18px;
-                padding: 18px;
-                margin-bottom: 14px;
-            }
-
-            .turn-heading {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-                margin-bottom: 10px;
-            }
-
-            .score-name {
-                font-size: 1.1rem;
-                font-weight: 800;
-                color: white;
-            }
-
-            .turn-text {
-                color: #e8ecff;
-                line-height: 1.6;
-                font-size: 1rem;
-            }
-
-            .audio-button {
-                border-radius: 14px;
-                border: 1px solid rgba(255,255,255,0.18);
-                background: linear-gradient(180deg, rgba(48,68,120,0.95), rgba(22,30,58,0.95));
-                color: white;
-                cursor: pointer;
-                font: 800 0.82rem 'Orbitron', sans-serif;
-                min-height: 38px;
-                padding: 0 14px;
-                box-shadow: 0 6px 20px rgba(0,0,0,0.25);
-                white-space: nowrap;
-            }
-
-            .audio-button:hover {
-                border-color: rgba(142,203,255,0.8);
-                box-shadow: 0 0 0 1px rgba(142,203,255,0.25), 0 10px 24px rgba(0,0,0,0.35);
-            }
-
-            .audio-button.stop {
-                background: linear-gradient(180deg, rgba(98,38,58,0.95), rgba(44,18,34,0.95));
-            }
-
-            @media (max-width: 640px) {
-                .arcade-panel {
-                    padding: 18px;
-                }
-
-                .topic-text {
-                    font-size: 1.35rem;
-                }
-
-                .turn-heading {
-                    align-items: flex-start;
-                    flex-direction: column;
-                }
-            }
-        </style>
-    </head>
-    <body>
-        <section class="arcade-panel">
-            <div class="topic-label">Debate Chat</div>
-            <div class="topic-text">__TOPIC__</div>
-            <div class="audio-toolbar">
-                <button class="audio-button" type="button" id="play-all" title="Gesamte Debatte vorlesen">
-                    ▶ Play all
-                </button>
-                <button class="audio-button stop" type="button" id="stop-audio" title="Audio stoppen">
-                    Stop
-                </button>
-                <span class="audio-status" id="speech-status">Ready.</span>
-            </div>
-            __CARDS__
-        </section>
-
-        <script>
-            const turns = __TURNS__;
-            const autoPlay = __AUTO_PLAY__;
-            const statusEl = document.getElementById("speech-status");
-
-            function setStatus(message) {
-                statusEl.textContent = message;
-            }
-
-            function getVoice(index) {
-                const voices = window.speechSynthesis.getVoices();
-                if (!voices.length) {
-                    return null;
-                }
-
-                const preferred =
-                    voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("en")) ||
-                    voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("de")) ||
-                    voices[0];
-                const alternate =
-                    voices.find((voice) => voice !== preferred && voice.lang === preferred.lang) ||
-                    preferred;
-
-                return index % 2 === 0 ? preferred : alternate;
-            }
-
-            function speakTurn(index, continueAfter = false) {
-                if (!("speechSynthesis" in window)) {
-                    setStatus("Speech output is not available in this browser.");
-                    return;
-                }
-
-                const turn = turns[index];
-                if (!turn) {
-                    return;
-                }
-
-                window.speechSynthesis.cancel();
-
-                const utterance = new SpeechSynthesisUtterance(`${turn.speaker}. ${turn.text}`);
-                utterance.rate = 0.95;
-                utterance.pitch = index % 2 === 0 ? 1.04 : 0.92;
-
-                const voice = getVoice(index);
-                if (voice) {
-                    utterance.voice = voice;
-                }
-
-                utterance.onstart = () => setStatus(`Reading ${turn.speaker}`);
-                utterance.onerror = () => setStatus("Speech stopped.");
-                utterance.onend = () => {
-                    if (continueAfter && index + 1 < turns.length) {
-                        speakTurn(index + 1, true);
-                    } else {
-                        setStatus("Ready.");
-                    }
-                };
-
-                window.speechSynthesis.speak(utterance);
-            }
-
-            function playAll() {
-                speakTurn(0, true);
-            }
-
-            document.querySelectorAll("[data-turn]").forEach((button) => {
-                button.addEventListener("click", () => {
-                    speakTurn(Number(button.dataset.turn), false);
-                });
-            });
-
-            document.getElementById("play-all").addEventListener("click", playAll);
-            document.getElementById("stop-audio").addEventListener("click", () => {
-                window.speechSynthesis.cancel();
-                setStatus("Stopped.");
-            });
-
-            if ("speechSynthesis" in window && "onvoiceschanged" in window.speechSynthesis) {
-                window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
-            }
-
-            if (autoPlay) {
-                window.setTimeout(() => {
-                    try {
-                        playAll();
-                    } catch (error) {
-                        setStatus("Press Play all to start audio.");
-                    }
-                }, 350);
-            }
-        </script>
-    </body>
-    </html>
-    """
-    panel_html = (
-        panel_html
-        .replace("__TOPIC__", _html_text(topic))
-        .replace("__CARDS__", cards_html)
-        .replace("__TURNS__", _json_for_script(turns))
-        .replace("__AUTO_PLAY__", "true" if autoplay else "false")
-    )
-
-    components.html(
-        panel_html,
-        height=_estimate_audio_panel_height(turns),
-        scrolling=True,
-    )
 
 
 def render_team_character_selection() -> tuple[str, str]:
@@ -1165,7 +1279,8 @@ def _save_start_preferences(philosopher_teams: bool, start_mode: str) -> None:
     st.session_state["philosopher_teams"] = philosopher_teams
     st.session_state["start_mode"] = start_mode
     st.session_state["_pref_start_mode"] = start_mode
-    st.session_state["_pref_summary"] = st.session_state.get("include_summary", False)
+    # summary is always enabled — model preference still tracked for model selector on character stage
+    st.session_state["_pref_summary_model"] = st.session_state.get("summary_model_label", list(MODEL_OPTIONS.keys())[0])
     st.session_state["_pref_agent_max_words"] = _valid_agent_max_words(
         st.session_state.get("agent_max_words")
     )
@@ -1173,12 +1288,17 @@ def _save_start_preferences(philosopher_teams: bool, start_mode: str) -> None:
         st.session_state.get("rounds")
     )
     st.session_state["_pref_developer_mode"] = st.session_state.get("developer_mode", False)
-    st.session_state["_pref_audio_output"] = st.session_state.get("audio_output", False)
-    st.session_state["_pref_audio_autoplay"] = (
-        st.session_state.get("audio_output", False)
-        and st.session_state.get("audio_autoplay", False)
+    st.session_state["_pref_audio_transcription"] = _session_bool(
+        "audio_transcription",
+        default=True,
+    )
+    st.session_state["_pref_speaker_speed"] = float(
+        st.session_state.get("speaker_speed", 1.0) or 1.0
     )
     st.session_state["_pref_philosopher_teams"] = philosopher_teams
+    st.session_state["_pref_team_max_review_attempts"] = int(
+        st.session_state.get("team_max_review_attempts", 3)
+    )
     st.session_state["_pref_team_configs"] = _team_configs_from_state()
 
 
@@ -1218,15 +1338,39 @@ def render_start_screen() -> None:
     with st.expander("Settings", expanded=False):
         setting_col1, setting_col2 = st.columns([1, 2])
         with setting_col1:
-            st.checkbox(
-                "Include written summary",
-                key="include_summary",
-                help="Generate a written debate summary after the arena stage.",
+            model_keys = list(MODEL_OPTIONS.keys())
+            _local_model_key = next(
+                (k for k, (p, _) in MODEL_OPTIONS.items() if p == "local"),
+                model_keys[0],
             )
-            audio_enabled = st.checkbox(
-                "Audio output",
-                key="audio_output",
-                help="Show browser speech controls for the debate arguments.",
+            def_model = st.session_state.get(
+                "summary_model_label",
+                st.session_state.get("_pref_summary_model", _local_model_key),
+            )
+            if def_model not in model_keys:
+                def_model = _local_model_key
+            st.selectbox(
+                "Summary Model",
+                options=model_keys,
+                index=model_keys.index(def_model),
+                key="summary_model_label",
+                help="Model to use for the written summary.",
+            )
+            audio_transcription = st.checkbox(
+                "Audio transcription",
+                key="audio_transcription",
+                help="Turn spoken text-to-speech output for debate and judge responses on or off.",
+            )
+            st.slider(
+                "Speaker Speed",
+                min_value=0.5,
+                max_value=2.0,
+                value=float(st.session_state.get("speaker_speed", 1.0) or 1.0),
+                step=0.1,
+                key="speaker_speed",
+                help="Playback speed for the text-to-speech audio output (0.5× = slow, 1.0× = normal, 2.0× = fast).",
+                format="%.1f×",
+                disabled=not audio_transcription,
             )
             st.checkbox(
                 "Developer mode",
@@ -1234,27 +1378,33 @@ def render_start_screen() -> None:
                 help="Show development diagnostics such as token usage after a run.",
             )
         with setting_col2:
-            st.slider(
-                "Max philosopher words",
-                min_value=MIN_AGENT_MAX_WORDS,
-                max_value=MAX_AGENT_MAX_WORDS,
-                step=10,
-                key="agent_max_words",
-            )
-            st.slider(
-                "Argument rounds",
-                min_value=MIN_ARGUMENT_ROUNDS,
-                max_value=MAX_ARGUMENT_ROUNDS,
-                step=1,
-                key="rounds",
-                help="Each round gives both philosophers one argument.",
-            )
-            st.checkbox(
-                "Autoplay audio",
-                key="audio_autoplay",
-                disabled=not audio_enabled,
-                help="Try to read the full debate automatically when the arena opens.",
-            )
+            if st.session_state.get("developer_mode", False):
+                st.slider(
+                    "Max philosopher words",
+                    min_value=MIN_AGENT_MAX_WORDS,
+                    max_value=MAX_AGENT_MAX_WORDS,
+                    value=int(st.session_state.get("agent_max_words", DEFAULT_AGENT_MAX_WORDS)),
+                    step=10,
+                    key="agent_max_words",
+                )
+                st.slider(
+                    "Argument rounds",
+                    min_value=MIN_ARGUMENT_ROUNDS,
+                    max_value=MAX_ARGUMENT_ROUNDS,
+                    value=int(st.session_state.get("rounds", DEFAULT_ARGUMENT_ROUNDS)),
+                    step=1,
+                    key="rounds",
+                    help="Each round gives both philosophers one argument.",
+                )
+                st.slider(
+                    "Max review attempts (Team Mode)",
+                    min_value=1,
+                    max_value=5,
+                    value=int(st.session_state.get("team_max_review_attempts", 3)),
+                    step=1,
+                    key="team_max_review_attempts",
+                    help="Max attempts the critic reviews and requests revision of the philosopher's draft.",
+                )
 
 
 def render_topic_stage() -> None:
@@ -1305,6 +1455,7 @@ def render_character_stage() -> None:
     render_topic_panel(st.session_state["selected_topic"])
 
     model_keys   = list(MODEL_OPTIONS.keys())
+    
     judge_keys   = ["judge1_model_label", "judge2_model_label", "judge3_model_label"]
     judge_labels = ["⚖️ Judge 1 Model", "⚖️ Judge 2 Model", "⚖️ Judge 3 Model"]
     start_mode = _current_start_mode()
@@ -1359,26 +1510,35 @@ def render_character_stage() -> None:
 
     # ── Debater models ────────────────────────────────────────────────────────
     st.markdown("**Debater Models**")
+    selected_judge_model_labels: list[str] = []
+    current_agent1_model = _valid_model_label(st.session_state.get("agent1_model_label"))
+    current_agent2_model = _valid_model_label(st.session_state.get("agent2_model_label"))
     if free_topic_mode:
-        st.selectbox(
+        agent1_model_label = st.selectbox(
             "🤖 Free Topic Team Model",
             options=model_keys,
+            index=model_keys.index(current_agent1_model),
             key="agent1_model_label",
             help="Model used by the free topic philosopher team.",
+        )
+        agent2_model_label = _valid_model_label(
+            st.session_state.get("agent2_model_label"), agent1_model_label
         )
     else:
         dcol1, dcol2 = st.columns(2)
         with dcol1:
-            st.selectbox(
+            agent1_model_label = st.selectbox(
                 "🤖 Player 1 Model",
                 options=model_keys,
+                index=model_keys.index(current_agent1_model),
                 key="agent1_model_label",
                 help="Model used by the FOR debater.",
             )
         with dcol2:
-            st.selectbox(
+            agent2_model_label = st.selectbox(
                 "🤖 Player 2 Model",
                 options=model_keys,
+                index=model_keys.index(current_agent2_model),
                 key="agent2_model_label",
                 help="Model used by the AGAINST debater.",
             )
@@ -1405,21 +1565,23 @@ def render_character_stage() -> None:
         ]
         jcols = st.columns(num_judges)
         for i in range(num_judges):
+            current_judge_model = _valid_model_label(st.session_state.get(judge_keys[i]))
             with jcols[i]:
-                st.selectbox(
+                selected_judge_model_labels.append(st.selectbox(
                     judge_labels[i],
                     options=model_keys,
+                    index=model_keys.index(current_judge_model),
                     key=judge_keys[i],
                     help=JUDGE_FOCUS[num_judges][i] or focus_hints[i],
-                )
+                ))
 
-    # ── Live model lineup (reads from session state updated by widgets above) ─
+    # ── Live model lineup (uses the same values returned by the widgets above) ─
     if free_topic_mode:
         rows = (
             f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
             f'<span style="color:#e8ecff;">{agent1_name} '
             f'<span style="color:#aaa;font-size:0.8rem;">(Free Topic Team)</span></span>'
-            f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent1_model_label"]}</span>'
+            f'<span style="color:#ffd54a;font-size:0.85rem;">{agent1_model_label}</span>'
             f'</div>'
         )
         team_configs = _team_configs_from_state()
@@ -1440,11 +1602,11 @@ def render_character_stage() -> None:
         rows = (
             f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
             f'<span style="color:#e8ecff;">{agent1_name} <span style="color:#aaa;font-size:0.8rem;">(For)</span></span>'
-            f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent1_model_label"]}</span>'
+            f'<span style="color:#ffd54a;font-size:0.85rem;">{agent1_model_label}</span>'
             f'</div>'
             f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
             f'<span style="color:#e8ecff;">{agent2_name} <span style="color:#aaa;font-size:0.8rem;">(Against)</span></span>'
-            f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state["agent2_model_label"]}</span>'
+            f'<span style="color:#ffd54a;font-size:0.85rem;">{agent2_model_label}</span>'
             f'</div>'
         )
     if philosopher_teams and not free_topic_mode:
@@ -1467,7 +1629,7 @@ def render_character_stage() -> None:
             rows += (
                 f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
                 f'<span style="color:#e8ecff;">{judge_roles[i]} Judge</span>'
-                f'<span style="color:#ffd54a;font-size:0.85rem;">{st.session_state[judge_keys[i]]}</span>'
+                f'<span style="color:#ffd54a;font-size:0.85rem;">{selected_judge_model_labels[i]}</span>'
                 f'</div>'
             )
     st.markdown(
@@ -1492,9 +1654,123 @@ def render_character_stage() -> None:
             # Snapshot all widget values to stable keys NOW, while they are live.
             # Going to stage 3 will cause Streamlit to disown these widget-bound keys,
             # but the _dp_ snapshot keys are unaffected by setdefault.
-            _save_debate_params(agent1_name, agent2_name)
+            _save_debate_params(
+                agent1_name,
+                agent2_name,
+                agent1_model_label,
+                agent2_model_label,
+                selected_judge_model_labels,
+            )
             st.session_state["stage"] = 3
             st.rerun()
+
+
+def render_winner_announcement() -> None:
+    judge_results = st.session_state.get("judge_results", [])
+    if not judge_results:
+        return
+        
+    num_judges = st.session_state.get("num_judges", 1)
+    if len(judge_results) < num_judges:
+        return
+    for jr in judge_results:
+        if jr is None or (isinstance(jr, dict) and jr.get("judgment") is None):
+            return
+            
+    judgment = st.session_state.get("judgment")
+    if not judgment or not isinstance(judgment, dict):
+        return
+        
+    winner = judgment.get("winner", "N/A")
+    if not winner or winner in ("N/A", "Error", ""):
+        winner = "Tie / Split Decision"
+        
+    icons_html = '<div style="display: flex; align-items: center; margin-right: 15px;">'
+    for i in range(num_judges):
+        jr = judge_results[i] if i < len(judge_results) else {}
+        role = jr.get('role', 'General Evaluation') if isinstance(jr, dict) else 'General Evaluation'
+        img_path = get_judge_image_path(role)
+        try:
+            img_src = image_to_data_uri(img_path)
+        except Exception:
+            img_src = ""
+        margin_left = "0px" if i == 0 else "-12px"
+        if img_src:
+            icons_html += (
+                f'<img src="{img_src}" style="'
+                f'height: 38px; width: 38px; border-radius: 50%; '
+                f'border: 2px solid #ffd54a; background: #1a1f35; '
+                f'margin-left: {margin_left}; z-index: {10 - i};'
+                f'" />'
+            )
+    icons_html += '</div>'
+    
+    banner_html = (
+        f'<div class="winner-banner" style="display: flex; align-items: center; '
+        f'padding: 16px 20px; border-radius: 18px; margin-top: 15px; margin-bottom: 15px;">'
+        f'{icons_html}'
+        f'<div style="flex-grow: 1;">'
+        f'<div style="font-size: 0.72rem; text-transform: uppercase; color: #ffd54a; '
+        f'letter-spacing: 1.5px; font-weight: 700; margin-bottom: 2px;">Debate Winner</div>'
+        f'<div style="font-size: 1.35rem; font-weight: 900; color: white;'
+        f'text-transform: uppercase; letter-spacing: 0.5px;">{html.escape(winner)}</div>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(banner_html, unsafe_allow_html=True)
+
+
+def render_generation_snapshot() -> None:
+    transcript = st.session_state.get("transcript", []) or []
+    judge_results = st.session_state.get("judge_results", []) or []
+    agent_configs = st.session_state.get("agent_configs", []) or []
+
+    avatar_by_speaker = {}
+    for cfg in agent_configs:
+        philosopher = PHILOSOPHER_LIBRARY.get(cfg.get("philosopher_key", ""))
+        if not philosopher:
+            continue
+        display_name = cfg.get("display_name") or philosopher["name"]
+        avatar_by_speaker[display_name] = philosopher.get("image")
+
+    for turn in transcript:
+        speaker = turn.get("speaker", "Agent")
+        avatar = avatar_by_speaker.get(speaker)
+        if avatar:
+            message = st.chat_message(speaker, avatar=avatar)
+        else:
+            message = st.chat_message(speaker)
+        with message:
+            st.markdown(turn.get("text", ""))
+
+    for index, jr in enumerate(judge_results, start=1):
+        if not isinstance(jr, dict):
+            continue
+        judge_role = jr.get('role', 'General Evaluation')
+        judge_label = f"Judge {index} · {judge_role} · {jr.get('model_label', '')}"
+        judgment = jr.get("judgment", {}) if isinstance(jr.get("judgment"), dict) else {}
+        with st.chat_message(judge_label, avatar=get_judge_image_path(judge_role)):
+            display_judgment = dict(judgment)
+            if not display_judgment.get("scores"):
+                display_judgment["scores"] = parse_judge_scores(
+                    display_judgment.get("reasoning", ""),
+                    transcript,
+                )
+            display_judgment["reasoning"] = clean_judge_reasoning(
+                display_judgment.get("reasoning", ""),
+                transcript,
+            )
+            render_judge_result_body(display_judgment)
+
+    render_winner_announcement()
+
+
+def render_generation_hold_actions() -> None:
+    render_development_panel()
+    st.markdown("<div style='height:18px;'></div>", unsafe_allow_html=True)
+    if st.button("Show Summary", type="primary", use_container_width=True):
+        st.session_state["stage"] = 5
+        st.rerun()
 
 
 def render_versus_stage() -> None:
@@ -1503,34 +1779,61 @@ def render_versus_stage() -> None:
     st.session_state["agent2_philosopher_name"] = (
         configs[1]["philosopher_name"] if len(configs) > 1 else ""
     )
-    render_topic_panel(st.session_state["selected_topic"])
+    render_topic_panel(st.session_state["selected_topic"], small=True)
 
-    st.markdown(
-        """
-        <div class="arcade-panel" style="text-align:center; margin-top:18px;">
-            <div style="font-size:1.8rem; font-weight:900; margin-bottom:10px;">Match Loading</div>
-            <div style="font-size:1.05rem; color:#cfd8ff; margin-bottom:16px;">
-                Preparing arena, syncing philosophers, loading debate engine...
-            </div>
-            <div class="blink" style="font-size:1.1rem; font-weight:800; color:#ffd54a;">
-                Entering Arena...
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
     if "transcript" not in st.session_state:
-        if not st.session_state.get("_loading_screen_primed", False):
-            st.session_state["_loading_screen_primed"] = True
-            st.rerun()
         _clear_stale_stage_tail()
-        with st.spinner("Running debate — this may take a minute…"):
-            handle_run_debate()
-    st.session_state.pop("_loading_screen_primed", None)
-    st.session_state["stage"] = 4
-    st.rerun()
+        handle_run_debate()
+        st.session_state.pop("_loading_screen_primed", None)
+        if st.session_state.get("team_mode_active", False):
+            render_generation_snapshot()
+    else:
+        render_generation_snapshot()
 
+    render_generation_hold_actions()
+
+
+def extract_winner(text: str, transcript: list) -> str:
+    speakers = []
+    for turn in transcript:
+        s = turn.get("speaker")
+        if s and s not in speakers:
+            speakers.append(s)
+
+    match = re.search(r"(?:winner|gewinner):\s*\*?\*?([^\n\*\#]+)", text, re.IGNORECASE)
+    if match:
+        winner_candidate = match.group(1).strip()
+        winner_candidate = re.sub(r"[\*\#\(\)]+", "", winner_candidate).strip()
+        for speaker in speakers:
+            for alias in _speaker_aliases(speaker):
+                if alias.lower() in winner_candidate.lower() or winner_candidate.lower() in alias.lower():
+                    return speaker
+
+    low_text = text.lower()
+    for speaker in speakers:
+        for alias in _speaker_aliases(speaker):
+            low_alias = alias.lower()
+            if (f"winner is {low_alias}" in low_text or 
+                f"{low_alias} is the winner" in low_text or 
+                f"{low_alias} wins" in low_text or 
+                f"{low_alias} was the winner" in low_text or
+                f"gewinner ist {low_alias}" in low_text or
+                f"{low_alias} gewinnt" in low_text or
+                f"{low_alias} ist der gewinner" in low_text):
+                return speaker
+
+    found_speakers = []
+    for speaker in speakers:
+        for alias in _speaker_aliases(speaker):
+            if alias.lower() in low_text:
+                found_speakers.append(speaker)
+                break
+    found_speakers = list(set(found_speakers))
+    if len(found_speakers) == 1:
+        return found_speakers[0]
+
+    return "N/A"
 
 def handle_run_debate() -> None:
     default_m = list(MODEL_OPTIONS.keys())[0]
@@ -1554,6 +1857,8 @@ def handle_run_debate() -> None:
         or st.session_state.get("_pref_rounds")
         or st.session_state.get("rounds")
     )
+    if free_topic_mode:
+        argument_rounds = 1
     agent_max_words    = _valid_agent_max_words(
         st.session_state.get("_dp_agent_max_words")
         or st.session_state.get("_pref_agent_max_words")
@@ -1564,15 +1869,19 @@ def handle_run_debate() -> None:
         or st.session_state.get("_pref_developer_mode")
         or st.session_state.get("developer_mode", False)
     )
-    audio_output       = bool(
-        st.session_state.get("_dp_audio_output")
-        or st.session_state.get("_pref_audio_output")
-        or st.session_state.get("audio_output", False)
+    audio_transcription = _session_bool(
+        "_dp_audio_transcription",
+        "_pref_audio_transcription",
+        "audio_transcription",
+        default=True,
     )
-    audio_autoplay     = audio_output and bool(
-        st.session_state.get("_dp_audio_autoplay")
-        or st.session_state.get("_pref_audio_autoplay")
-        or st.session_state.get("audio_autoplay", False)
+    audio_output       = audio_transcription
+    audio_autoplay     = True
+    speaker_speed      = float(
+        st.session_state.get("_dp_speaker_speed")
+        or st.session_state.get("_pref_speaker_speed")
+        or st.session_state.get("speaker_speed", 1.0)
+        or 1.0
     )
     philosopher_teams  = bool(
         free_topic_mode
@@ -1586,9 +1895,29 @@ def handle_run_debate() -> None:
         or st.session_state.get("_pref_team_configs")
         or _team_configs_from_state()
     )
+    max_review_attempts = int(
+        st.session_state.get("_dp_max_review_attempts")
+        or st.session_state.get("_pref_team_max_review_attempts")
+        or st.session_state.get("team_max_review_attempts", 3)
+    )
+
+    # Write back resolved display values early so any subsequent UI renders (e.g. Winner Announcement icons) see the correct counts
+    st.session_state["agent1_philosopher_name"] = agent1_name
+    st.session_state["agent2_philosopher_name"] = agent2_name
+    st.session_state["agent1_model_label"]      = agent1_model_label
+    st.session_state["agent2_model_label"]      = agent2_model_label
+    st.session_state["num_judges"]              = num_judges
+    st.session_state["rounds"]                  = argument_rounds
+    st.session_state["agent_max_words"]         = agent_max_words
+    st.session_state["developer_mode"]          = developer_mode
+    st.session_state["audio_transcription"]     = audio_transcription
+    st.session_state["speaker_speed"]           = speaker_speed
+    st.session_state["philosopher_teams"]       = philosopher_teams
 
     agent1_provider, agent1_model = MODEL_OPTIONS[agent1_model_label]
     if free_topic_mode:
+        free_team_config = dict(team_configs.get("free", {}))
+        free_team_config["max_review_attempts"] = max_review_attempts
         agent_configs = [
             {
                 "philosopher_key": saved_configs[0]["philosopher_key"],
@@ -1599,12 +1928,16 @@ def handle_run_debate() -> None:
                 "display_name": f"{agent1_name} (Free Topic)",
                 "side":        "Free Topic",
                 "goal":        "Explore the topic as a philosopher team without forcing a pro/contra debate.",
-                "team_config": team_configs.get("free", {}),
+                "team_config": free_team_config,
             },
         ]
         player_strategies = [p1_strategy]
     else:
         agent2_provider, agent2_model = MODEL_OPTIONS[agent2_model_label]
+        for_team_config = dict(team_configs.get("for", {}))
+        for_team_config["max_review_attempts"] = max_review_attempts
+        against_team_config = dict(team_configs.get("against", {}))
+        against_team_config["max_review_attempts"] = max_review_attempts
         agent_configs = [
             {
                 "philosopher_key": saved_configs[0]["philosopher_key"],
@@ -1613,7 +1946,7 @@ def handle_run_debate() -> None:
                 "model":       agent1_model,
                 "model_label": agent1_model_label,
                 "display_name": f"{agent1_name} (For)",
-                "team_config": team_configs.get("for", {}),
+                "team_config": for_team_config,
             },
             {
                 "philosopher_key": saved_configs[1]["philosopher_key"],
@@ -1622,20 +1955,47 @@ def handle_run_debate() -> None:
                 "model":       agent2_model,
                 "model_label": agent2_model_label,
                 "display_name": f"{agent2_name} (Against)",
-                "team_config": team_configs.get("against", {}),
+                "team_config": against_team_config,
             },
         ]
         player_strategies = [p1_strategy, p2_strategy]
 
     reset_token_usage()
-    transcript = run_debate(
-        st.session_state["selected_topic"],
-        argument_rounds,
-        player_strategies,
-        agent_configs,
-        max_words=agent_max_words,
-        team_mode=philosopher_teams,
-    )
+
+    transcript = []
+    
+    # We display a spinner if we are in team mode, but for single mode we stream directly.
+    if philosopher_teams:
+        with st.spinner("Team debate is running..."):
+            for item in run_debate(
+                st.session_state["selected_topic"],
+                argument_rounds,
+                player_strategies,
+                agent_configs,
+                max_words=agent_max_words,
+                team_mode=philosopher_teams,
+                on_step=None
+            ):
+                if item.get("type") == "team":
+                    transcript = item["transcript"]
+    else:
+        # Real-time streaming for single mode!
+
+        for item in run_debate(
+            st.session_state["selected_topic"],
+            argument_rounds,
+            player_strategies,
+            agent_configs,
+            max_words=agent_max_words,
+            team_mode=philosopher_teams,
+            on_step=None
+        ):
+            if item.get("type") == "single":
+                agent = item["agent"]
+                with st.chat_message(agent.name, avatar=agent.image):
+                    st.write_stream(item["generator"])
+                transcript = item["transcript"]
+
     team_traces = [
         {
             "round": turn.get("round", 0),
@@ -1653,78 +2013,203 @@ def handle_run_debate() -> None:
     else:
         focuses     = JUDGE_FOCUS[num_judges]
         role_labels = JUDGE_ROLE_LABELS[num_judges]
+
+        judgments    = [None] * num_judges
+        judge_results = [None] * num_judges
+
+        selected_topic = st.session_state["selected_topic"]
+
+        # Run judges sequentially and stream them like the philosopher messages.
         for i in range(num_judges):
             j_model_label = (
                 st.session_state.get(f"_dp_judge{i+1}_model")
                 or st.session_state.get(f"judge{i+1}_model_label", default_m)
             )
             j_provider, j_model = MODEL_OPTIONS[j_model_label]
-            j = judge_debate(
-                st.session_state["selected_topic"], transcript,
-                judge_provider=j_provider,
-                judge_model=j_model,
-                focus=focuses[i],
-            )
-            judgments.append(j)
-            judge_results.append({
-                "judgment":    j,
-                "model_label": j_model_label,
-                "role":        role_labels[i],
-            })
+            focus = focuses[i]
+            role  = role_labels[i]
+
+            judge_label = f"Judge {i + 1} · {role} · {j_model_label}"
+            with st.chat_message(judge_label, avatar=get_judge_image_path(role)):
+                try:
+                    from audio_engine import SentenceChunker, get_audio_manager
+
+                    # Configure distinct voice and panning per judge
+                    judge_voices = ["en-US-EmmaNeural", "en-GB-SoniaNeural", "en-US-AndrewMultilingualNeural"]
+                    voice_id = judge_voices[i % len(judge_voices)]
+                    panning = -0.4 if i == 0 else (0.4 if i == 1 else 0.0)
+
+                    speaker_speed = float(
+                        st.session_state.get("_dp_speaker_speed")
+                        or st.session_state.get("_pref_speaker_speed")
+                        or st.session_state.get("speaker_speed", 1.0)
+                        or 1.0
+                    )
+
+                    def on_sentence(sentence):
+                        if not _session_bool(
+                            "_dp_audio_transcription",
+                            "_pref_audio_transcription",
+                            "audio_transcription",
+                            default=True,
+                        ):
+                            return
+                        if get_audio_manager().is_running:
+                            get_audio_manager().enqueue(sentence, voice_id, panning, speaker_speed)
+
+                    chunker = SentenceChunker(on_sentence)
+
+                    token_gen = judge_debate(
+                        selected_topic, transcript,
+                        judge_provider=j_provider,
+                        judge_model=j_model,
+                        focus=focus,
+                    )
+                    
+                    j_text = ""
+
+                    def stream_judge_tokens():
+                        nonlocal j_text
+                        for chunk in token_gen:
+                            j_text += chunk
+                            chunker.add_token(chunk)
+                            yield chunk
+
+                    judge_body = st.empty()
+                    with judge_body.container():
+                        st.write_stream(stream_judge_tokens())
+
+                    chunker.flush()
+                    winner = extract_winner(j_text, transcript)
+                    scores = parse_judge_scores(j_text, transcript)
+                    reasoning = clean_judge_reasoning(j_text, transcript)
+                    j = {
+                        "winner": winner,
+                        "reasoning": reasoning,
+                        "scores": scores
+                    }
+                    judge_body.empty()
+                    with judge_body.container():
+                        render_judge_result_body(j)
+                    judgments[i] = j
+                    judge_results[i] = {
+                        "judgment":    j,
+                        "model_label": j_model_label,
+                        "role":        role,
+                    }
+
+                except Exception as exc:
+                    err_j = {"winner": "Error", "reasoning": f"Error running judge: {exc}", "scores": {}}
+                    judgments[i] = err_j
+                    judge_results[i] = {
+                        "judgment":    err_j,
+                        "model_label": j_model_label,
+                        "role":        role,
+                    }
+                    st.error(f"Error executing judge: {exc}")
+
         judgment = aggregate_judgments(judgments)
 
-    if st.session_state.get("_pref_summary", False):
-        s_model_label = st.session_state.get("_dp_judge1_model") or st.session_state.get("judge1_model_label", default_m)
-        s_provider, s_model = MODEL_OPTIONS[s_model_label]
-        summary = summarize_debate(
-            st.session_state["selected_topic"], transcript, judgment,
-            judge_provider=s_provider, judge_model=s_model,
-            free_topic_mode=free_topic_mode,
-        )
-    else:
-        summary = None
+    st.session_state["judgment"] = judgment
+    st.session_state["judge_results"] = judge_results
+
+    if not free_topic_mode:
+        render_winner_announcement()
+
+    # Summary is always generated
+    s_model_label = st.session_state.get("_dp_summary_model") or st.session_state.get("_pref_summary_model") or st.session_state.get("summary_model_label", default_m)
+    if s_model_label not in MODEL_OPTIONS:
+        s_model_label = default_m
+    s_provider, s_model = MODEL_OPTIONS[s_model_label]
+    
+    with st.spinner("Finalizing debate summary..."):
+        try:
+            summary_gen = summarize_debate(
+                st.session_state["selected_topic"], transcript, judgment,
+                judge_provider=s_provider, judge_model=s_model,
+                free_topic_mode=free_topic_mode,
+            )
+            summary = "".join(list(summary_gen))
+        except Exception as exc:
+            summary = f"Error generating summary: {exc}"
 
     st.session_state["transcript"]    = transcript
-    st.session_state["judgment"]      = judgment
-    st.session_state["judge_results"] = judge_results
     st.session_state["summary"]       = summary
     st.session_state["topic"]         = st.session_state["selected_topic"]
     st.session_state["agent_configs"] = agent_configs
-    st.session_state["team_configs"]   = team_configs
+    st.session_state["team_configs"]  = team_configs
     st.session_state["token_usage"]   = get_token_usage()
     st.session_state["team_traces"]   = team_traces
     st.session_state["team_mode_active"] = philosopher_teams
-    st.session_state["_audio_debate_id"] = int(
-        st.session_state.get("_audio_debate_id", 0) or 0
-    ) + 1
+    st.session_state["judge_step"]    = 0  # start at first judge
 
-    # Write back resolved display values so the arena/summary stages show the right names
-    st.session_state["agent1_philosopher_name"] = agent1_name
-    st.session_state["agent2_philosopher_name"] = agent2_name
-    st.session_state["agent1_model_label"]      = agent1_model_label
-    st.session_state["agent2_model_label"]      = agent2_model_label
-    st.session_state["num_judges"]              = num_judges
-    st.session_state["rounds"]                  = argument_rounds
-    st.session_state["agent_max_words"]         = agent_max_words
-    st.session_state["developer_mode"]          = developer_mode
-    st.session_state["audio_output"]            = audio_output
-    st.session_state["audio_autoplay"]          = audio_autoplay
-    st.session_state["philosopher_teams"]       = philosopher_teams
+
+
+def get_judge_focus_description(role: str) -> str:
+    role_lower = str(role).lower()
+    if "logic" in role_lower:
+        return "Focuses on logical validity, structural consistency, and argument strength."
+    elif "debate" in role_lower:
+        return "Focuses on counterargument handling, style, and debate dynamics."
+    elif "clarity" in role_lower:
+        return "Focuses on clarity of expression, language, and communication quality."
+    else:
+        return "Focuses on overall debate quality, balancing logic, style, and clarity."
+
+
+def render_judge_evaluation_panel(jr: dict) -> None:
+    j = jr["judgment"]
+    j_r = j.get("reasoning", "")
+    role = jr.get("role", "General Evaluation")
+    model_label = jr.get("model_label", "")
+
+    col1, col2 = st.columns([1, 2.2])
+
+    with col1:
+        scale_image_src = image_to_data_uri(get_judge_image_path(role))
+        focus_desc = get_judge_focus_description(role)
+
+        card_html = (
+            f'<div class="fighter-card" style="min-height: auto; padding-bottom: 24px; margin-bottom: 18px;">'
+            f'<img src="{scale_image_src}" class="fighter-image" style="height: 180px; object-fit: contain; margin-bottom: 16px;">'
+            f'<div class="fighter-name" style="font-size: 1.25rem;">{html.escape(role)} Judge</div>'
+            f'<div class="fighter-side" style="font-size: 0.8rem; color: #ffd54a; margin-top: 4px;">{html.escape(model_label)}</div>'
+            f'<div class="fighter-stance" style="font-size: 0.85rem; margin-top: 10px; line-height: 1.4; color: #e8ecff;">{html.escape(focus_desc)}</div>'
+            f'</div>'
+        )
+        st.markdown(card_html, unsafe_allow_html=True)
+
+    with col2:
+        j_r_html = (
+            f'<div style="color:#e8ecff; margin-bottom:12px; line-height:1.6; font-size:0.95rem;">'
+            f'{_markdown_to_html(j_r)}'
+            f'</div>'
+            if j_r else ""
+        )
+        scores_html = _build_scores_html(j.get("scores", {}))
+
+        details_html = (
+            f'<div class="arcade-panel" style="padding: 20px; margin-bottom: 12px;">'
+            f'<div class="topic-label" style="margin-bottom: 12px; font-size: 0.85rem;">Evaluation Details</div>'
+            f'{j_r_html}'
+            f'{scores_html}'
+            f'</div>'
+        )
+        st.markdown(details_html, unsafe_allow_html=True)
 
 
 def render_arena_stage() -> None:
+    """Stage 4: shows the debate transcript, then continues to the summary."""
     if "transcript" not in st.session_state:
         handle_run_debate()
 
-    transcript = st.session_state.get("transcript")
-    judgment = st.session_state.get("judgment")
-
-    topic = st.session_state.get("topic", st.session_state.get("selected_topic", ""))
+    transcript      = st.session_state.get("transcript")
+    topic           = st.session_state.get("topic", st.session_state.get("selected_topic", ""))
     free_topic_mode = _current_start_mode() == "free"
 
-    # Participant model attribution — read directly from session state to avoid stale agent_configs
-    phil1 = st.session_state.get("agent1_philosopher_name", "Player 1")
-    phil2 = st.session_state.get("agent2_philosopher_name", "Player 2")
+    # ── Debater model attribution ─────────────────────────────────────────────
+    phil1  = st.session_state.get("agent1_philosopher_name", "Player 1")
+    phil2  = st.session_state.get("agent2_philosopher_name", "Player 2")
     label1 = st.session_state.get("agent1_model_label", "")
     label2 = st.session_state.get("agent2_model_label", "")
     if label1 or label2:
@@ -1757,199 +2242,159 @@ def render_arena_stage() -> None:
             unsafe_allow_html=True,
         )
 
-    audio_enabled = bool(
-        st.session_state.get("_dp_audio_output")
-        or st.session_state.get("_pref_audio_output")
-        or st.session_state.get("audio_output", False)
-    )
-    debate_id = st.session_state.get("_audio_debate_id")
-    should_autoplay = (
-        audio_enabled
-        and bool(
-            st.session_state.get("_dp_audio_autoplay")
-            or st.session_state.get("_pref_audio_autoplay")
-            or st.session_state.get("audio_autoplay", False)
-        )
-        and debate_id is not None
-        and st.session_state.get("_audio_autoplay_seen_id") != debate_id
-    )
-
-    if should_autoplay:
-        st.session_state["_audio_autoplay_seen_id"] = debate_id
-
-    if audio_enabled:
-        render_debate_audio_panel(topic, transcript, autoplay=should_autoplay)
-    else:
-        render_debate_text_panel(topic, transcript)
-
-    if judgment:
-        num_judges    = st.session_state.get("num_judges", 1)
-        judge_results = st.session_state.get("judge_results", [])
-
-        # ── Panel header label ────────────────────────────────────────────────
-        if num_judges == 1:
-            jr0         = judge_results[0] if judge_results else {}
-            panel_label = f"Judge Result · {jr0.get('role', 'General Evaluation')} · {jr0.get('model_label', '')}"
-        else:
-            panel_label = f"Panel Result · {num_judges} Judges · Averaged"
-
-        # ── Reasoning block (all built as HTML strings before the markdown call)
-        if num_judges == 1:
-            raw_r = judgment.get("reasoning", "")
-            reasoning_html = (
-                f'<p style="color:#cfd8ff; margin:0.8rem 0 0.4rem;">{raw_r}</p>'
-                if raw_r else ""
-            )
-        else:
-            parts = [
-                f'<p style="color:#aaa; font-size:0.85rem; margin:0.3rem 0;">'
-                f'<b>{jr["role"]} Judge ({jr["model_label"]}):</b> '
-                f'{jr["judgment"].get("reasoning", "")}</p>'
-                for jr in judge_results if jr["judgment"].get("reasoning")
-            ]
-            reasoning_html = "".join(parts)
-
-        # ── Single markdown call — everything truly inside the arcade-panel div
-        st.markdown(
-            f"""
-            <div class="arcade-panel" style="margin-top:8px; margin-bottom:18px;">
-                <div class="topic-label">{panel_label}</div>
-                <div class="winner-banner">Winner: {judgment.get("winner", "N/A")}</div>
-                {reasoning_html}
-                {_build_scores_html(judgment.get("scores", {}))}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # ── Individual judge breakdowns (multi-judge only) ────────────────────
-        if len(judge_results) > 1:
-            cards_html = ""
-            for jr in judge_results:
-                j   = jr["judgment"]
-                j_r = j.get("reasoning", "")
-                j_r_html = (
-                    f'<p style="color:#aaa; font-size:0.82rem; margin:0.4rem 0;">{j_r}</p>'
-                    if j_r else ""
-                )
-                cards_html += (
-                    f'<div class="score-card" style="border-left:3px solid #7c8fff; margin-bottom:10px;">'
-                    f'<div class="score-name" style="font-size:0.95rem;">{jr["role"]} Judge</div>'
-                    f'<div style="color:#aaa; font-size:0.8rem; margin-bottom:0.5rem;">{jr["model_label"]}</div>'
-                    f'<div class="winner-banner" style="font-size:0.9rem; padding:10px 14px; margin-bottom:0.5rem;">'
-                    f'Winner: {j.get("winner", "N/A")}</div>'
-                    f'{j_r_html}'
-                    f'{_build_scores_html(j.get("scores", {}))}'
-                    f'</div>'
-                )
-
-            st.markdown(
-                f"""
-                <div class="arcade-panel" style="margin-top:8px; margin-bottom:18px;">
-                    <div class="topic-label">Individual Judge Breakdowns</div>
-                    {cards_html}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
+    render_debate_text_panel(topic, transcript)
     render_development_panel()
 
-    if st.session_state.get("_pref_summary", False):
-        bottom_left, bottom_right = st.columns(2)
-    else:
-        bottom_left = st.container()
-        bottom_right = None
-
-    with bottom_left:
+    # ── Navigation ────────────────────────────────────────────────────────────
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
         if st.button("New Debate", use_container_width=True):
             reset_game()
             st.rerun()
+    with btn_col2:
+        if st.button("Show Summary", type="primary", use_container_width=True):
+            st.session_state["stage"] = 5
+            st.rerun()
 
-    if bottom_right is not None:
-        with bottom_right:
-            if st.button("Continue to Summary", type="primary", use_container_width=True):
-                st.session_state["stage"] = 5
-                st.rerun()
+
+SUMMARY_INTRO_RE = re.compile(
+    r"^here(?:'s|\s+(?:are|is))\b.*summar",
+    re.IGNORECASE,
+)
+
+
+def _summary_display_lines(summary: str) -> list[str]:
+    return [
+        line
+        for line in (raw.strip() for raw in summary.strip().splitlines())
+        if line and not SUMMARY_INTRO_RE.search(line)
+    ]
 
 
 def render_summary_stage() -> None:
+    """Stage 5: one-sentence-per-argument summary."""
     summary       = st.session_state.get("summary")
-    judgment      = st.session_state.get("judgment")
-    judge_results = st.session_state.get("judge_results", [])
-    num_judges    = st.session_state.get("num_judges", 1)
+    topic         = st.session_state.get("topic", st.session_state.get("selected_topic", ""))
+    
+    winner = None
+    winner_display = ""
 
-    # ── Summary text panel ────────────────────────────────────────────────────
+    # ── Topic reminder ────────────────────────────────────────────────────────
+    render_topic_panel(topic, small=True)
+
+    # ── Winner Announcement ───────────────────────────────────────────────────
+    free_topic_mode = _current_start_mode() == "free"
+    if not free_topic_mode:
+        judge_results = st.session_state.get("judge_results", [])
+        votes = []
+        for jr in judge_results:
+            if isinstance(jr, dict) and "judgment" in jr:
+                w = jr["judgment"].get("winner")
+                if w and w not in ("N/A", "Error"):
+                    votes.append(w.strip())
+        
+        if votes:
+            from collections import Counter
+            counts = Counter(votes)
+            most_common = counts.most_common()
+            if len(most_common) > 1 and most_common[0][1] == most_common[1][1]:
+                winner = "Tie / Split Decision"
+            else:
+                winner = most_common[0][0]
+        else:
+            judgment = st.session_state.get("judgment")
+            if isinstance(judgment, dict):
+                w = judgment.get("winner")
+                if w and w not in ("N/A", "Error"):
+                    winner = w
+
+        if winner:
+            # Map winner to philosopher info
+            winner_key = None
+            for key, details in PHILOSOPHER_LIBRARY.items():
+                if details["name"].lower() in winner.lower() or winner.lower() in details["name"].lower():
+                    winner_key = key
+                    break
+            
+            if winner_key:
+                winner_img_path = PHILOSOPHER_LIBRARY[winner_key]["image"]
+                winner_display = PHILOSOPHER_LIBRARY[winner_key]["name"]
+                status_text = "🏆 Winner"
+            else:
+                winner_img_path = "images/Judge_General.png"
+                winner_display = winner
+                status_text = "⚖️ Result"
+            
+            try:
+                winner_img_src = image_to_data_uri(winner_img_path)
+            except Exception:
+                winner_img_src = ""
+
+            winner_html = (
+                f'<div class="arcade-panel" style="margin-bottom:18px; display:flex; align-items:center; gap:20px;">'
+            )
+            if winner_img_src:
+                winner_html += f'<img src="{winner_img_src}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 2px solid #ffd54a; box-shadow: 0 0 10px rgba(255,213,74,0.3);">'
+            winner_html += (
+                f'<div>'
+                f'<div style="font-size:0.75rem; color:#ffd54a; text-transform:uppercase; letter-spacing:2px; font-weight:700; margin-bottom:4px;">{status_text}</div>'
+                f'<div style="font-size:1.6rem; font-weight:900; color:#fff3bf; text-transform:uppercase; text-shadow:0 0 8px rgba(255,243,191,0.2);">{html.escape(winner_display)}</div>'
+                f'</div>'
+                f'</div>'
+            )
+            st.markdown(winner_html, unsafe_allow_html=True)
+
+    # ── Argument summary (one sentence per argument) ──────────────────────────
     if summary:
-        summary_safe = summary.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        summary_html = summary_safe.replace("\n", "<br>")
+        # Render each line as its own styled row
+        lines = _summary_display_lines(summary)
+        rows_html = ""
+        for line in lines:
+            # Try to split 'Speaker: sentence' for styling
+            if ":" in line:
+                speaker_part, _, rest = line.partition(":")
+                rows_html += (
+                    f'<div style="display:flex; gap:10px; margin-bottom:10px; '
+                    f'align-items:baseline;">'
+                    f'<span style="color:#ffd54a; font-weight:700; white-space:nowrap; '
+                    f'font-size:0.88rem; min-width:130px; text-align:right;'
+                    f'">{html.escape(speaker_part.strip())}</span>'
+                    f'<span style="color:#e8ecff; line-height:1.6;">'
+                    f'{html.escape(rest.strip())}</span>'
+                    f'</div>'
+                )
+            else:
+                rows_html += (
+                    f'<div style="color:#e8ecff; margin-bottom:8px; line-height:1.6;">'
+                    f'{html.escape(line)}</div>'
+                )
+        
+        # Append Winner at the bottom of the summary box
+        if not free_topic_mode and winner:
+            rows_html += (
+                f'<div style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.1); padding-top:12px; '
+                f'display:flex; gap:10px; align-items:baseline;">'
+                f'<span style="color:#ffd54a; font-weight:800; white-space:nowrap; '
+                f'font-size:0.95rem; min-width:130px; text-align:right;'
+                f'">Winner</span>'
+                f'<span style="color:#fff; font-weight:800; font-size:1.0rem; text-transform:uppercase; letter-spacing:0.5px;">'
+                f'{html.escape(winner_display)}</span>'
+                f'</div>'
+            )
+
         st.markdown(
             f"""
             <div class="arcade-panel" style="margin-bottom:18px;">
-                <div class="topic-label">Summary</div>
-                <div style="color:#e8ecff; line-height:1.75; margin-top:0.6rem;">{summary_html}</div>
+                <div class="topic-label">Debate Summary</div>
+                <div style="margin-top:0.8rem;">{rows_html}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-    else:
-        st.markdown(
-            """
-            <div class="score-card" style="margin-bottom:18px; color:#aaa; font-size:0.9rem;">
-                Written summary disabled — enable <em>Include written summary</em> on the start screen.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    # ── Individual judge results (always shown, one panel per judge) ──────────
-    if judgment and judge_results:
-        for jr in judge_results:
-            j     = jr["judgment"]
-            j_r   = j.get("reasoning", "")
-            j_r_html = (
-                f'<p style="color:#cfd8ff; margin:0.8rem 0 0.4rem;">{j_r}</p>'
-                if j_r else ""
-            )
-            st.markdown(
-                f"""
-                <div class="arcade-panel" style="margin-top:8px; margin-bottom:18px;">
-                    <div class="topic-label">{jr["role"]} Judge</div>
-                    <div style="color:#aaa; font-size:0.8rem; margin-bottom:0.6rem;">
-                        Model: <span style="color:#ffd54a;">{jr["model_label"]}</span>
-                    </div>
-                    <div class="winner-banner">Winner: {j.get("winner", "N/A")}</div>
-                    {j_r_html}
-                    {_build_scores_html(j.get("scores", {}))}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        # ── Averaged panel (only when multiple judges) ────────────────────────
-        if num_judges > 1:
-            st.markdown(
-                f"""
-                <div class="arcade-panel" style="margin-top:8px; margin-bottom:18px;">
-                    <div class="topic-label">Panel Result · {num_judges} Judges · Averaged</div>
-                    <div class="winner-banner">Winner: {judgment.get("winner", "N/A")}</div>
-                    {_build_scores_html(judgment.get("scores", {}))}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
 
     render_development_panel()
 
     # ── Navigation ────────────────────────────────────────────────────────────
-    bottom_left, bottom_right = st.columns(2)
-
-    with bottom_left:
-        if st.button("Back to Arena", use_container_width=True):
-            st.session_state["stage"] = 4
-            st.rerun()
-
-    with bottom_right:
-        if st.button("New Debate", type="primary", use_container_width=True):
-            reset_game()
-            st.rerun()
+    if st.button("New Debate", type="primary", use_container_width=True):
+        reset_game()
+        st.rerun()

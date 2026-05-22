@@ -74,12 +74,23 @@ def inject_arcade_css() -> None:
         }
 
         .topic-panel {
-            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
-            border: 2px solid rgba(255,255,255,0.12);
-            border-radius: 24px;
-            padding: 30px;
+            background: rgba(255,255,255,0.05);
+            border: 2px solid rgba(255,255,255,0.14);
+            border-radius: 22px;
+            padding: 1.4rem 2rem 1.6rem;
             text-align: center;
-            box-shadow: 0 0 30px rgba(0,0,0,0.35);
+            box-shadow: 0 0 25px rgba(0,0,0,0.35);
+            backdrop-filter: blur(10px);
+            margin-bottom: 1rem;
+        }
+
+        .small-topic-panel {
+            background: rgba(255,255,255,0.05);
+            border: 2px solid rgba(255,255,255,0.14);
+            border-radius: 18px;
+            padding: 0.8rem 1.4rem 1rem;
+            backdrop-filter: blur(10px);
+            margin-bottom: 0.75rem;
         }
 
         .topic-label {
@@ -92,11 +103,23 @@ def inject_arcade_css() -> None:
             font-weight: 700;
         }
 
+        .small-topic-label {
+            font-size: 0.75rem;
+            letter-spacing: 2px;
+            margin-bottom: 6px;
+        }
+
         .topic-text {
             font-size: 1.85rem;
             font-weight: 800;
             line-height: 1.35;
             color: white;
+        }
+
+        .small-topic-text {
+            font-size: 1.25rem;
+            font-weight: 700;
+            line-height: 1.3;
         }
 
         .blink {
