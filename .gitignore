@@ -4,6 +4,9 @@
 __pycache__/
 *.pyc
 
+# Runtime logs
+audio_latency_log.json
+
 # Video recordings
 *.webm
 *.mp4

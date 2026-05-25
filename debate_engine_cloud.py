@@ -609,10 +609,10 @@ class DebateAgent:
             task_name = "philosophical response" if is_free else "debate response"
             
             if attempt == 1:
-                prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nGuidance: {selection.revision_guidance}\nRole: Speaker\nTask: Write the {task_name}."
+                prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nGuidance: {selection.revision_guidance}\nRole: Speaker\nTask: Write the {task_name}. Limit: {max_words} words."
             else:
                 last_review = trace["reviews"][-1]
-                prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nRejected Draft: {current_draft}\nFeedback: {last_review['critique']}\nRole: Speaker\nTask: Revise the {task_name}."
+                prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nRejected Draft: {current_draft}\nFeedback: {last_review['critique']}\nRole: Speaker\nTask: Revise the {task_name}. Limit: {max_words} words."
             
             def stream_callback(token):
                 if not hasattr(self, "_chunker"):
