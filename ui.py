@@ -834,10 +834,10 @@ def clean_judge_reasoning(text: str, transcript: list[dict]) -> str:
     
     if matches:
         blocks = []
-        for marker, content in matches:
+        for _, content in matches:
             content_cleaned = content.strip()
             content_cleaned = re.sub(r"(?is)\n?\s*winner\s*:.*$", "", content_cleaned).strip()
-            blocks.append(f"{marker}: {content_cleaned}")
+            blocks.append(content_cleaned)
         return "\n\n".join(blocks).strip()
 
     # 2. Fallback to original speaker-based clean logic
@@ -891,7 +891,7 @@ def clean_judge_reasoning(text: str, transcript: list[dict]) -> str:
         re.IGNORECASE,
     )
     if marker:
-        cleaned = cleaned[marker.start():]
+        cleaned = cleaned[marker.end():].strip()
     else:
         aliases = [
             alias.lower()
@@ -1966,7 +1966,8 @@ def handle_run_debate() -> None:
     
     # We display a spinner if we are in team mode, but for single mode we stream directly.
     if philosopher_teams:
-        with st.spinner("Team debate is running..."):
+        spinner_text = "Free Topic Mode running..." if free_topic_mode else "Team debate is running..."
+        with st.spinner(spinner_text):
             for item in run_debate(
                 st.session_state["selected_topic"],
                 argument_rounds,
@@ -2019,101 +2020,129 @@ def handle_run_debate() -> None:
 
         selected_topic = st.session_state["selected_topic"]
 
-        # Run judges sequentially and stream them like the philosopher messages.
-        for i in range(num_judges):
-            j_model_label = (
-                st.session_state.get(f"_dp_judge{i+1}_model")
-                or st.session_state.get(f"judge{i+1}_model_label", default_m)
-            )
-            j_provider, j_model = MODEL_OPTIONS[j_model_label]
-            focus = focuses[i]
-            role  = role_labels[i]
-
-            judge_label = f"Judge {i + 1} · {role} · {j_model_label}"
-            with st.chat_message(judge_label, avatar=get_judge_image_path(role)):
-                try:
-                    from audio_engine import SentenceChunker, get_audio_manager
-
-                    # Configure distinct voice and panning per judge
-                    judge_voices = ["en-US-EmmaNeural", "en-GB-SoniaNeural", "en-US-AndrewMultilingualNeural"]
-                    voice_id = judge_voices[i % len(judge_voices)]
-                    panning = -0.4 if i == 0 else (0.4 if i == 1 else 0.0)
-
-                    speaker_speed = float(
-                        st.session_state.get("_dp_speaker_speed")
-                        or st.session_state.get("_pref_speaker_speed")
-                        or st.session_state.get("speaker_speed", 1.0)
-                        or 1.0
+        if philosopher_teams:
+            # In team mode judges run silently; render_generation_snapshot() displays
+            # transcript → judges → winner in the correct order after this function returns.
+            with st.spinner("Judges are evaluating the debate..."):
+                for i in range(num_judges):
+                    j_model_label = (
+                        st.session_state.get(f"_dp_judge{i+1}_model")
+                        or st.session_state.get(f"judge{i+1}_model_label", default_m)
                     )
-
-                    def on_sentence(sentence):
-                        if not _session_bool(
-                            "_dp_audio_transcription",
-                            "_pref_audio_transcription",
-                            "audio_transcription",
-                            default=True,
-                        ):
-                            return
-                        if get_audio_manager().is_running:
-                            get_audio_manager().enqueue(sentence, voice_id, panning, speaker_speed)
-
-                    chunker = SentenceChunker(on_sentence)
-
-                    token_gen = judge_debate(
-                        selected_topic, transcript,
-                        judge_provider=j_provider,
-                        judge_model=j_model,
-                        focus=focus,
-                    )
-                    
-                    j_text = ""
-
-                    def stream_judge_tokens():
-                        nonlocal j_text
-                        for chunk in token_gen:
-                            j_text += chunk
-                            chunker.add_token(chunk)
-                            yield chunk
-
-                    judge_body = st.empty()
-                    with judge_body.container():
-                        st.write_stream(stream_judge_tokens())
-
-                    chunker.flush()
-                    winner = extract_winner(j_text, transcript)
-                    scores = parse_judge_scores(j_text, transcript)
-                    reasoning = clean_judge_reasoning(j_text, transcript)
-                    j = {
-                        "winner": winner,
-                        "reasoning": reasoning,
-                        "scores": scores
-                    }
-                    judge_body.empty()
-                    with judge_body.container():
-                        render_judge_result_body(j)
+                    j_provider, j_model = MODEL_OPTIONS[j_model_label]
+                    focus = focuses[i]
+                    role  = role_labels[i]
+                    try:
+                        j_text = "".join(list(judge_debate(
+                            selected_topic, transcript,
+                            judge_provider=j_provider,
+                            judge_model=j_model,
+                            focus=focus,
+                        )))
+                        winner = extract_winner(j_text, transcript)
+                        scores = parse_judge_scores(j_text, transcript)
+                        reasoning = clean_judge_reasoning(j_text, transcript)
+                        j = {"winner": winner, "reasoning": reasoning, "scores": scores}
+                    except Exception as exc:
+                        j = {"winner": "Error", "reasoning": f"Error running judge: {exc}", "scores": {}}
                     judgments[i] = j
-                    judge_results[i] = {
-                        "judgment":    j,
-                        "model_label": j_model_label,
-                        "role":        role,
-                    }
+                    judge_results[i] = {"judgment": j, "model_label": j_model_label, "role": role}
+        else:
+            # Single mode: stream judges live like the philosopher messages.
+            for i in range(num_judges):
+                j_model_label = (
+                    st.session_state.get(f"_dp_judge{i+1}_model")
+                    or st.session_state.get(f"judge{i+1}_model_label", default_m)
+                )
+                j_provider, j_model = MODEL_OPTIONS[j_model_label]
+                focus = focuses[i]
+                role  = role_labels[i]
 
-                except Exception as exc:
-                    err_j = {"winner": "Error", "reasoning": f"Error running judge: {exc}", "scores": {}}
-                    judgments[i] = err_j
-                    judge_results[i] = {
-                        "judgment":    err_j,
-                        "model_label": j_model_label,
-                        "role":        role,
-                    }
-                    st.error(f"Error executing judge: {exc}")
+                judge_label = f"Judge {i + 1} · {role} · {j_model_label}"
+                with st.chat_message(judge_label, avatar=get_judge_image_path(role)):
+                    try:
+                        from audio_engine import SentenceChunker, get_audio_manager
+
+                        # Configure distinct voice and panning per judge
+                        judge_voices = ["en-US-EmmaNeural", "en-GB-SoniaNeural", "en-US-AndrewMultilingualNeural"]
+                        voice_id = judge_voices[i % len(judge_voices)]
+                        panning = -0.4 if i == 0 else (0.4 if i == 1 else 0.0)
+
+                        speaker_speed = float(
+                            st.session_state.get("_dp_speaker_speed")
+                            or st.session_state.get("_pref_speaker_speed")
+                            or st.session_state.get("speaker_speed", 1.0)
+                            or 1.0
+                        )
+
+                        def on_sentence(sentence):
+                            if not _session_bool(
+                                "_dp_audio_transcription",
+                                "_pref_audio_transcription",
+                                "audio_transcription",
+                                default=True,
+                            ):
+                                return
+                            if get_audio_manager().is_running:
+                                get_audio_manager().enqueue(sentence, voice_id, panning, speaker_speed)
+
+                        chunker = SentenceChunker(on_sentence)
+
+                        token_gen = judge_debate(
+                            selected_topic, transcript,
+                            judge_provider=j_provider,
+                            judge_model=j_model,
+                            focus=focus,
+                        )
+
+                        j_text = ""
+
+                        def stream_judge_tokens():
+                            nonlocal j_text
+                            for chunk in token_gen:
+                                j_text += chunk
+                                chunker.add_token(chunk)
+                                yield chunk
+
+                        judge_body = st.empty()
+                        with judge_body.container():
+                            st.write_stream(stream_judge_tokens())
+
+                        chunker.flush()
+                        winner = extract_winner(j_text, transcript)
+                        scores = parse_judge_scores(j_text, transcript)
+                        reasoning = clean_judge_reasoning(j_text, transcript)
+                        j = {
+                            "winner": winner,
+                            "reasoning": reasoning,
+                            "scores": scores
+                        }
+                        judge_body.empty()
+                        with judge_body.container():
+                            render_judge_result_body(j)
+                        judgments[i] = j
+                        judge_results[i] = {
+                            "judgment":    j,
+                            "model_label": j_model_label,
+                            "role":        role,
+                        }
+
+                    except Exception as exc:
+                        err_j = {"winner": "Error", "reasoning": f"Error running judge: {exc}", "scores": {}}
+                        judgments[i] = err_j
+                        judge_results[i] = {
+                            "judgment":    err_j,
+                            "model_label": j_model_label,
+                            "role":        role,
+                        }
+                        st.error(f"Error executing judge: {exc}")
 
         judgment = aggregate_judgments(judgments)
 
     st.session_state["judgment"] = judgment
     st.session_state["judge_results"] = judge_results
 
-    if not free_topic_mode:
+    if not free_topic_mode and not philosopher_teams:
         render_winner_announcement()
 
     # Summary is always generated
@@ -2391,6 +2420,74 @@ def render_summary_stage() -> None:
             """,
             unsafe_allow_html=True,
         )
+
+    # ── Free Topic: decision process panel ───────────────────────────────────
+    if free_topic_mode:
+        team_traces = st.session_state.get("team_traces", [])
+        for entry in team_traces:
+            trace = entry.get("trace", {})
+            if not isinstance(trace, dict):
+                continue
+            candidates = trace.get("candidates", [])
+            selection = trace.get("selection", {}) if isinstance(trace.get("selection"), dict) else {}
+            reviews = trace.get("reviews", [])
+            selected_id = selection.get("selected_candidate", "")
+            final_score = int(trace.get("final_score", 0) or 0)
+            approved = trace.get("approved", False)
+
+            with st.expander("Decision Process — How this argument was crafted", expanded=True):
+                st.caption(
+                    "The philosopher team internally generated two strategic approaches (A and B). "
+                    "A critic evaluated both plans and selected the stronger one. "
+                    "A speaker then wrote a draft based on that plan, which the critic reviewed for quality."
+                )
+
+                if candidates:
+                    st.markdown("**Both approaches considered:**")
+                    for c in candidates:
+                        if not isinstance(c, dict):
+                            continue
+                        cid = c.get("id", "?")
+                        angle = c.get("angle", "")
+                        plan = c.get("plan_summary", "No summary available.")
+                        is_selected = cid == selected_id
+                        border_color = "#ffd54a" if is_selected else "#444"
+                        label_color = "#ffd54a" if is_selected else "#888"
+                        badge = "Selected ✓" if is_selected else "Not selected ✗"
+                        st.markdown(
+                            f'<div style="border-left:3px solid {border_color};padding:8px 12px;'
+                            f'margin-bottom:10px;background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0;">'
+                            f'<div style="color:{label_color};font-weight:700;font-size:0.88rem;margin-bottom:4px;">'
+                            f'Approach {cid} · {angle} · {badge}'
+                            f'</div>'
+                            f'<div style="color:#e8ecff;font-size:0.9rem;line-height:1.5;">{html.escape(plan)}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                sel_reasoning = selection.get("selection_reasoning", "")
+                if sel_reasoning:
+                    st.markdown(f"**Why Approach {selected_id} was chosen:**")
+                    st.write(sel_reasoning)
+
+                if reviews:
+                    total = len(reviews)
+                    status_str = "approved ✓" if approved else "best effort (max attempts reached)"
+                    st.markdown(
+                        f"**Quality review — {total} draft{'s' if total > 1 else ''} · "
+                        f"final score {final_score}/10 · {status_str}:**"
+                    )
+                    for review in reviews:
+                        if not isinstance(review, dict):
+                            continue
+                        attempt = int(review.get("attempt", 0) or 0)
+                        score = int(review.get("score", 0) or 0)
+                        rev_approved = review.get("approved", False)
+                        critique = review.get("critique", "")
+                        rev_status = "Approved ✓" if rev_approved else "Revision requested ↺"
+                        st.markdown(f"Draft {attempt}: **{score}/10** · {rev_status}")
+                        if critique and not rev_approved:
+                            st.caption(f"Critique: {critique}")
 
     render_development_panel()
 
