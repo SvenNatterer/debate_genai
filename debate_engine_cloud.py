@@ -28,6 +28,15 @@ TEAM_MAX_REVIEW_ATTEMPTS = 3
 TEAM_MIN_APPROVAL_SCORE = 8
 TEAM_INTERNAL_CHAR_LIMIT = 1800
 _AZURE_API_VERSION = "2024-12-01-preview"
+FREE_TOPIC_SYSTEM_PROMPT = (
+    "You are not participating in a debate. "
+    "You are part of a philosopher-inspired opinion team. "
+    "Give a thoughtful opinion on the user's given input. "
+    "If the input naturally supports opposing positions, consider one supportive/pro "
+    "perspective and one skeptical/contra perspective. "
+    "If it does not, do not force a pro/contra frame; provide a useful, direct opinion instead. "
+    "Be concise, logically consistent, and stay on topic."
+)
 
 
 def _audio_transcription_enabled() -> bool:
@@ -532,9 +541,37 @@ class DebateAgent:
     agent_model: str = ""
     team_config: Dict[str, Any] = field(default_factory=dict)
 
+    def _team_roles_for_trace(self) -> Dict[str, Dict[str, str]]:
+        roles = {}
+        for role_key, role in self.team_config.items():
+            if role_key == "max_review_attempts" or not isinstance(role, dict):
+                continue
+            roles[role_key] = {
+                "label": str(role.get("label", role_key)),
+                "philosopher": str(role.get("philosopher_name", "-")),
+                "strategy": str(role.get("strategy", "-")),
+            }
+        return roles
+
+    def _system_prompt(self) -> str:
+        return FREE_TOPIC_SYSTEM_PROMPT if self.side == "Free Topic" else SYSTEM_PROMPT
+
     def _team_context(self, topic, history, round_idx, strategy):
         is_free = self.side == "Free Topic"
         history_label = "Start of discussion." if is_free else "Start of debate."
+        if is_free:
+            return f"""
+            User input: {topic}
+            Round: {round_idx}
+            Mode: Free question opinion mode
+            Persona: {self.philosopher}
+            Style: {self.style}
+            Strategy: {strategy}
+            Task frame: Give your opinion on the given input. If the input allows it,
+            consider one supportive/pro and one skeptical/contra angle. Do not force
+            a debate when the input is open-ended, personal, descriptive, or one-sided.
+            History: {history or history_label}
+            """
         return f"""
         Topic: {topic}
         Round: {round_idx}
@@ -557,25 +594,49 @@ class DebateAgent:
         on_draft_start=None,
     ):
         context = self._team_context(topic, history, round_idx, strategy)
-        trace = {"calls": [], "candidates": [], "selection": {}, "reviews": [], "revisions": [], "approved": False, "final_score": 0}
+        trace = {
+            "calls": [],
+            "candidates": [],
+            "selection": {},
+            "reviews": [],
+            "revisions": [],
+            "approved": False,
+            "final_score": 0,
+            "team_roles": self._team_roles_for_trace(),
+        }
         
         # 1. Generate Candidates
         if on_step:
-            on_step("Strategists A and B planning approaches in parallel...")
+            if self.side == "Free Topic":
+                on_step("Strategists A and B exploring opinion angles in parallel...")
+            else:
+                on_step("Strategists A and B planning approaches in parallel...")
 
         def run_strategist(cid, angle):
             is_free = self.side == "Free Topic"
-            task_desc = f"Plan a {angle} philosophical perspective." if is_free else f"Plan a {angle} argument."
+            if is_free:
+                task_desc = (
+                    f"Plan a {angle} opinion response to the given input. "
+                    "If a pro/contra split fits the input, use that angle clearly. "
+                    "If it does not fit, create a distinct helpful viewpoint without pretending there is a debate."
+                )
+            else:
+                task_desc = f"Plan a {angle} argument."
             prompt = f"{context}\nRole: Strategist\nTask: {task_desc} Output JSON only."
-            res = chat_completion(SYSTEM_PROMPT, prompt, provider=self.agent_provider, model=self.agent_model, response_model=TeamCandidatePlan)
+            res = chat_completion(self._system_prompt(), prompt, provider=self.agent_provider, model=self.agent_model, response_model=TeamCandidatePlan)
             return cid, angle, res
 
         candidates_by_id = {}
         errors = []
+        strategist_angles = (
+            [("A", "supportive/pro"), ("B", "skeptical/contra")]
+            if self.side == "Free Topic"
+            else [("A", "Logical Core"), ("B", "Persona Voice")]
+        )
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = [
                 executor.submit(run_strategist, cid, angle)
-                for cid, angle in [("A", "Logical Core"), ("B", "Persona Voice")]
+                for cid, angle in strategist_angles
             ]
             for future in concurrent.futures.as_completed(futures):
                 try:
@@ -586,6 +647,11 @@ class DebateAgent:
                         cand_dict = res.model_dump()
                         cand_dict["id"] = cid
                         cand_dict["angle"] = angle
+                        role_key = "agent_a" if cid == "A" else "agent_b"
+                        role = trace["team_roles"].get(role_key, {})
+                        if role:
+                            cand_dict["role_philosopher"] = role.get("philosopher", "")
+                            cand_dict["role_strategy"] = role.get("strategy", "")
                         candidates_by_id[cid] = cand_dict
                 except Exception as exc:
                     errors.append(f"Strategist {cid} failed: {exc}")
@@ -600,9 +666,17 @@ class DebateAgent:
 
         # 2. Select Candidate
         if on_step:
-            on_step("Critic selects the best strategy...")
-        prompt = f"{context}\nCandidates:\n{json.dumps(candidates)}\nRole: Critic\nTask: Select best plan. Output JSON only."
-        selection = chat_completion(SYSTEM_PROMPT, prompt, provider=self.agent_provider, model=self.agent_model, response_model=TeamSelection)
+            on_step("Critic selects the best response plan...")
+        if self.side == "Free Topic":
+            selection_task = (
+                "Select A or B as the best plan for a direct opinion response. "
+                "Prefer the plan that best answers the input without forcing a debate. "
+                "If both pro and contra are useful, choose the plan that can acknowledge both while still giving a clear opinion."
+            )
+        else:
+            selection_task = "Select best plan."
+        prompt = f"{context}\nCandidates:\n{json.dumps(candidates)}\nRole: Critic\nTask: {selection_task} Output JSON only."
+        selection = chat_completion(self._system_prompt(), prompt, provider=self.agent_provider, model=self.agent_model, response_model=TeamSelection)
         if isinstance(selection, str): return {"text": selection, "team_trace": trace}
         trace["selection"] = selection.model_dump()
         trace["calls"].append("Critic Selector")
@@ -618,13 +692,31 @@ class DebateAgent:
             if on_draft_start:
                 on_draft_start(attempt)
             is_free = self.side == "Free Topic"
-            task_name = "philosophical response" if is_free else "debate response"
+            task_name = "opinion response" if is_free else "debate response"
             
             if attempt == 1:
-                prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nGuidance: {selection.revision_guidance}\nRole: Speaker\nTask: Write the {task_name}. Limit: {max_words} words."
+                if is_free:
+                    prompt = (
+                        f"{context}\nPlan: {selected_plan['plan_summary']}\n"
+                        f"Guidance: {selection.revision_guidance}\nRole: Speaker\n"
+                        f"Task: Write the {task_name}. Give your opinion on the input. "
+                        f"Do not write a debate speech, do not mention Agent A/B, and do not expose internal roles. "
+                        f"If pro/contra is relevant, acknowledge both briefly and state the stronger view. "
+                        f"Limit: {max_words} words."
+                    )
+                else:
+                    prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nGuidance: {selection.revision_guidance}\nRole: Speaker\nTask: Write the {task_name}. Limit: {max_words} words."
             else:
                 last_review = trace["reviews"][-1]
-                prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nRejected Draft: {current_draft}\nFeedback: {last_review['critique']}\nRole: Speaker\nTask: Revise the {task_name}. Limit: {max_words} words."
+                if is_free:
+                    prompt = (
+                        f"{context}\nPlan: {selected_plan['plan_summary']}\n"
+                        f"Rejected Draft: {current_draft}\nFeedback: {last_review['critique']}\n"
+                        f"Role: Speaker\nTask: Revise the {task_name}. Keep it as a direct opinion, not a debate. "
+                        f"Limit: {max_words} words."
+                    )
+                else:
+                    prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nRejected Draft: {current_draft}\nFeedback: {last_review['critique']}\nRole: Speaker\nTask: Revise the {task_name}. Limit: {max_words} words."
             
             def stream_callback(token):
                 if on_token:
@@ -653,7 +745,7 @@ class DebateAgent:
                     self._chunker = SentenceChunker(on_sentence)
                 self._chunker.add_token(token)
 
-            draft_res = chat_completion(SYSTEM_PROMPT, prompt, provider=self.agent_provider, model=self.agent_model, response_model=None, stream_callback=stream_callback)
+            draft_res = chat_completion(self._system_prompt(), prompt, provider=self.agent_provider, model=self.agent_model, response_model=None, stream_callback=stream_callback)
             if hasattr(self, "_chunker"):
                 self._chunker.flush()
                 del self._chunker
@@ -666,8 +758,16 @@ class DebateAgent:
 
             if on_step:
                 on_step(f"Critic reviews Draft {attempt}...")
-            prompt = f"{context}\nDraft to Review: {current_draft}\nRole: Critic\nTask: Review (0-10) and approve if >={TEAM_MIN_APPROVAL_SCORE}. Output JSON only."
-            review_res = chat_completion(SYSTEM_PROMPT, prompt, provider=self.agent_provider, model=self.agent_model, response_model=TeamReview)
+            if is_free:
+                review_task = (
+                    f"Review (0-10) and approve if >={TEAM_MIN_APPROVAL_SCORE}. "
+                    "Reward direct opinion, relevance to the input, useful balance when pro/contra is natural, "
+                    "and absence of debate framing or internal role names."
+                )
+            else:
+                review_task = f"Review (0-10) and approve if >={TEAM_MIN_APPROVAL_SCORE}."
+            prompt = f"{context}\nDraft to Review: {current_draft}\nRole: Critic\nTask: {review_task} Output JSON only."
+            review_res = chat_completion(self._system_prompt(), prompt, provider=self.agent_provider, model=self.agent_model, response_model=TeamReview)
             if isinstance(review_res, str): 
                 trace["approved"] = True
                 break
@@ -713,7 +813,7 @@ class DebateAgent:
             step_msg = "Formulating philosophical response..." if is_free else "Formulating philosophical argument..."
             on_step(step_msg)
             
-        task_msg = "Provide your philosophical response to the topic." if self.side == "Free Topic" else "Provide your philosophical argument."
+        task_msg = "Give your opinion on the given input. If pro/contra is relevant, acknowledge both briefly and state your view." if self.side == "Free Topic" else "Provide your philosophical argument."
         prompt = f"{self._team_context(topic, history, round_idx, strategy)}\nTask: {task_msg} Limit: {max_words} words."
         
         def stream_callback(token):
@@ -742,7 +842,7 @@ class DebateAgent:
             self._chunker.add_token(token)
 
         res = chat_completion(
-            SYSTEM_PROMPT, 
+            self._system_prompt(),
             prompt, 
             provider=self.agent_provider, 
             model=self.agent_model, 
@@ -965,11 +1065,12 @@ def summarize_debate(topic, transcript, judgment=None, judge_provider="", judge_
     history = "\n".join([f"{t['speaker']}: {t['text']}" for t in transcript])
     if free_topic_mode:
         prompt = (
-            f"Summarize this philosophical discussion on '{topic}'.\n\n"
+            f"Summarize the final public response to this free topic: '{topic}'.\n\n"
             f"Rules:\n"
-            f"- Reduce EACH argument/turn by each speaker to EXACTLY ONE sentence.\n"
-            f"- List them in order, prefixed with the speaker's name.\n"
-            f"- Do NOT write a prose paragraph. Use one line per argument.\n"
+            f"- Summarize ONLY the selected final argument shown in the transcript.\n"
+            f"- Ignore internal team roles, candidate names, strategy labels, and decision-process details.\n"
+            f"- Return EXACTLY ONE line.\n"
+            f"- Prefix the line with the public speaker name only; do not include parenthetical role labels.\n"
             f"- Format: 'Speaker: One-sentence summary.'\n\n"
             f"Transcript:\n{history}"
         )
@@ -984,7 +1085,7 @@ def summarize_debate(topic, transcript, judgment=None, judge_provider="", judge_
             f"Transcript:\n{history}"
         )
     return chat_completion(
-        SYSTEM_PROMPT, 
+        FREE_TOPIC_SYSTEM_PROMPT if free_topic_mode else SYSTEM_PROMPT,
         prompt, 
         provider=judge_provider, 
         model=judge_model, 

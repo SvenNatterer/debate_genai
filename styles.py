@@ -144,6 +144,68 @@ def inject_arcade_css() -> None:
             margin-bottom: 12px;
         }
 
+        .fighter-animation-stage {
+            position: relative;
+            width: 100%;
+            height: 260px;
+            overflow: hidden;
+            border-radius: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            background:
+                linear-gradient(180deg, rgba(21,34,58,0.92), rgba(9,12,22,0.98));
+            border: 1px solid rgba(255,255,255,0.12);
+        }
+
+        .fighter-animation-stage::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                linear-gradient(90deg, transparent, rgba(142,203,255,0.16), transparent),
+                repeating-linear-gradient(0deg, rgba(255,255,255,0.08) 0 1px, transparent 1px 5px);
+            opacity: 0.22;
+            mix-blend-mode: screen;
+            animation: fighter-scan 2.8s linear infinite;
+            pointer-events: none;
+        }
+
+        .fighter-sprite-bob {
+            position: relative;
+            z-index: 2;
+            width: 176px;
+            height: 176px;
+            margin-bottom: 20px;
+            transform-origin: 50% 88%;
+            animation: nietzsche-idle-bob 0.9s steps(5, end) infinite;
+            filter: drop-shadow(0 16px 16px rgba(0,0,0,0.42));
+        }
+
+        .fighter-sprite-idle {
+            width: 176px;
+            height: 176px;
+            background-repeat: no-repeat;
+            background-size: 880px 176px;
+            image-rendering: pixelated;
+            transform: scale(1.18);
+            transform-origin: 50% 88%;
+            animation: nietzsche-sprite-idle 0.9s steps(5, end) infinite;
+        }
+
+        .fighter-idle-shadow {
+            position: absolute;
+            z-index: 1;
+            bottom: 18px;
+            width: 48%;
+            height: 18px;
+            border-radius: 50%;
+            background: rgba(0,0,0,0.48);
+            filter: blur(8px);
+            animation: nietzsche-shadow 0.9s steps(5, end) infinite;
+        }
+
         .fighter-name {
             font-size: 1.5rem;
             font-weight: 900;
@@ -214,6 +276,30 @@ def inject_arcade_css() -> None:
 
         @keyframes blink {
             50% { opacity: 0; }
+        }
+
+        @keyframes nietzsche-sprite-idle {
+            from { background-position: 0 0; }
+            to { background-position: -880px 0; }
+        }
+
+        @keyframes nietzsche-idle-bob {
+            0% { transform: translateY(0); }
+            40% { transform: translateY(-3px); }
+            80% { transform: translateY(1px); }
+            100% { transform: translateY(0); }
+        }
+
+        @keyframes nietzsche-shadow {
+            0% { transform: scaleX(1); opacity: 0.48; }
+            34% { transform: scaleX(0.86); opacity: 0.34; }
+            67% { transform: scaleX(0.94); opacity: 0.42; }
+            100% { transform: scaleX(1); opacity: 0.48; }
+        }
+
+        @keyframes fighter-scan {
+            0% { transform: translateX(-80%); }
+            100% { transform: translateX(80%); }
         }
         </style>
         """,

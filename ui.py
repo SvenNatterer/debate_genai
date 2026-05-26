@@ -571,11 +571,25 @@ def render_topic_panel(topic: str, small: bool = False) -> None:
 def render_fighter_card(philosopher_key: str, side_label: str) -> None:
     philosopher = PHILOSOPHER_LIBRARY[philosopher_key]
     image_src = image_to_data_uri(philosopher["image"])
+    sprite_path = Path("images/Nietzsche_idle_strip.png")
+    if philosopher_key == "nietzsche" and sprite_path.exists():
+        sprite_src = image_to_data_uri(str(sprite_path))
+        fighter_media = (
+            f'<div class="fighter-animation-stage">'
+            f'<div class="fighter-sprite-bob">'
+            f'<div class="fighter-sprite-idle" style="background-image:url({sprite_src});" '
+            f'aria-label="{html.escape(philosopher["name"])} idle animation"></div>'
+            f'</div>'
+            f'<div class="fighter-idle-shadow"></div>'
+            f'</div>'
+        )
+    else:
+        fighter_media = f'<img src="{image_src}" class="fighter-image" alt="{html.escape(philosopher["name"])}">'
 
     st.markdown(
         f"""
         <div class="fighter-card">
-            <img src="{image_src}" class="fighter-image">
+            {fighter_media}
             <div class="fighter-name">{philosopher['name']}</div>
             <div class="fighter-side">{side_label}</div>
             <div class="fighter-stance">{philosopher['stance']}</div>
@@ -1928,7 +1942,7 @@ def handle_run_debate() -> None:
                 "model_label": agent1_model_label,
                 "display_name": f"{agent1_name} (Free Topic)",
                 "side":        "Free Topic",
-                "goal":        "Explore the topic as a philosopher team without forcing a pro/contra debate.",
+                "goal":        "Give an opinion on the input, using pro and contra angles only when they fit.",
                 "team_config": free_team_config,
             },
         ]
@@ -2340,10 +2354,80 @@ def _summary_display_lines(summary: str) -> list[str]:
     ]
 
 
+def _clean_summary_speaker_label(label: str) -> str:
+    cleaned = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", str(label)).strip()
+    cleaned = re.sub(r"^(?:\*\*|__)(.*?)(?:\*\*|__)$", r"\1", cleaned).strip()
+    return cleaned
+
+
+def _summary_speaker_label_html(label: str) -> str:
+    match = re.match(r"^(.*?)\s*\(([^)]*)\)\s*$", str(label).strip())
+    if match:
+        name, role = match.groups()
+        return (
+            f'<span>{html.escape(name.strip())}</span> '
+            f'<span style="color:#cfd8ff;font-size:0.72rem;font-weight:700;'
+            f'opacity:0.78;white-space:nowrap;">({html.escape(role.strip())})</span>'
+        )
+    return html.escape(str(label).strip())
+
+
+def _summary_public_speaker_label(label: str) -> str:
+    return re.sub(r"\s*\([^)]*\)\s*$", "", str(label).strip()).strip()
+
+
+def _summary_display_rows(
+    summary: str,
+    transcript: list[dict] | None = None,
+    use_transcript_speakers: bool = False,
+) -> list[tuple[str, str]]:
+    rows = []
+    transcript = transcript or []
+    for idx, line in enumerate(_summary_display_lines(summary)):
+        speaker = ""
+        text = line
+        if ":" in line:
+            speaker, _, text = line.partition(":")
+            speaker = _clean_summary_speaker_label(speaker)
+        if use_transcript_speakers and idx < len(transcript):
+            transcript_speaker = str(transcript[idx].get("speaker", "")).strip()
+            if transcript_speaker:
+                speaker = transcript_speaker
+        rows.append((speaker, text.strip()))
+    return rows
+
+
+def _free_topic_team_roles_for_display(trace: dict | None = None) -> dict:
+    if isinstance(trace, dict):
+        team_roles = trace.get("team_roles", {})
+        if isinstance(team_roles, dict) and team_roles:
+            return team_roles
+
+    team_configs = (
+        st.session_state.get("team_configs")
+        or st.session_state.get("_dp_team_configs")
+        or st.session_state.get("_pref_team_configs")
+        or {}
+    )
+    free_config = team_configs.get("free", {}) if isinstance(team_configs, dict) else {}
+    roles = {}
+    for role_key, role_label, _fallback_key in TEAM_ROLE_DEFS:
+        role = free_config.get(role_key, {}) if isinstance(free_config, dict) else {}
+        if not isinstance(role, dict):
+            continue
+        roles[role_key] = {
+            "label": role.get("label", role_label),
+            "philosopher": role.get("philosopher_name") or role.get("philosopher", "-"),
+            "strategy": role.get("strategy", "-"),
+        }
+    return roles
+
+
 def render_summary_stage() -> None:
     """Stage 5: one-sentence-per-argument summary."""
     summary       = st.session_state.get("summary")
     topic         = st.session_state.get("topic", st.session_state.get("selected_topic", ""))
+    transcript    = st.session_state.get("transcript", []) or []
     
     winner = None
     winner_display = ""
@@ -2416,26 +2500,31 @@ def render_summary_stage() -> None:
     # ── Argument summary (one sentence per argument) ──────────────────────────
     if summary:
         # Render each line as its own styled row
-        lines = _summary_display_lines(summary)
+        rows = _summary_display_rows(
+            summary,
+            transcript,
+            use_transcript_speakers=free_topic_mode,
+        )
+        if free_topic_mode and rows:
+            speaker_part, rest = rows[0]
+            rows = [(_summary_public_speaker_label(speaker_part), rest)]
         rows_html = ""
-        for line in lines:
-            # Try to split 'Speaker: sentence' for styling
-            if ":" in line:
-                speaker_part, _, rest = line.partition(":")
+        for speaker_part, rest in rows:
+            if speaker_part:
                 rows_html += (
-                    f'<div style="display:flex; gap:10px; margin-bottom:10px; '
-                    f'align-items:baseline;">'
-                    f'<span style="color:#ffd54a; font-weight:700; white-space:nowrap; '
-                    f'font-size:0.88rem; min-width:130px; text-align:right;'
-                    f'">{html.escape(speaker_part.strip())}</span>'
-                    f'<span style="color:#e8ecff; line-height:1.6;">'
+                    f'<div style="display:grid; grid-template-columns:minmax(170px, 260px) minmax(0, 1fr); '
+                    f'column-gap:18px; row-gap:4px; margin-bottom:10px; align-items:baseline;">'
+                    f'<span style="color:#ffd54a; font-weight:800; font-size:0.88rem; '
+                    f'text-align:right; overflow-wrap:anywhere;">'
+                    f'{_summary_speaker_label_html(speaker_part)}</span>'
+                    f'<span style="color:#e8ecff; line-height:1.6; min-width:0;">'
                     f'{html.escape(rest.strip())}</span>'
                     f'</div>'
                 )
             else:
                 rows_html += (
                     f'<div style="color:#e8ecff; margin-bottom:8px; line-height:1.6;">'
-                    f'{html.escape(line)}</div>'
+                    f'{html.escape(rest.strip())}</div>'
                 )
         
         # Append Winner at the bottom of the summary box
@@ -2471,14 +2560,23 @@ def render_summary_stage() -> None:
             candidates = trace.get("candidates", [])
             selection = trace.get("selection", {}) if isinstance(trace.get("selection"), dict) else {}
             reviews = trace.get("reviews", [])
+            team_roles = _free_topic_team_roles_for_display(trace)
             selected_id = selection.get("selected_candidate", "")
             final_score = int(trace.get("final_score", 0) or 0)
             approved = trace.get("approved", False)
 
             with st.expander("Decision Process — How this argument was crafted", expanded=True):
+                if team_roles:
+                    role_summary = " | ".join(
+                        f"{role.get('label', key)}: {role.get('philosopher', '-')} / {role.get('strategy', '-')}"
+                        for key, role in team_roles.items()
+                        if isinstance(role, dict)
+                    )
+                    st.caption(role_summary)
                 st.caption(
-                    "The philosopher team internally generated two strategic approaches (A and B). "
-                    "A critic evaluated both plans and selected the stronger one. "
+                    "The philosopher team internally generated two opinion angles. "
+                    "When the input allows it, A explores a supportive/pro angle and B explores a skeptical/contra angle. "
+                    "A critic selected the plan that best answers the input. "
                     "A speaker then wrote a draft based on that plan, which the critic reviewed for quality."
                 )
 
@@ -2490,15 +2588,22 @@ def render_summary_stage() -> None:
                         cid = c.get("id", "?")
                         angle = c.get("angle", "")
                         plan = c.get("plan_summary", "No summary available.")
+                        role_key = "agent_a" if cid == "A" else "agent_b" if cid == "B" else ""
+                        role = team_roles.get(role_key, {}) if isinstance(team_roles, dict) else {}
+                        role_name = c.get("role_philosopher") or role.get("philosopher", "")
+                        role_strategy = c.get("role_strategy") or role.get("strategy", "")
                         is_selected = cid == selected_id
                         border_color = "#ffd54a" if is_selected else "#444"
                         label_color = "#ffd54a" if is_selected else "#888"
                         badge = "Selected ✓" if is_selected else "Not selected ✗"
+                        role_bits = f" · {role_name}" if role_name else ""
+                        strategy_bits = f" · {role_strategy}" if role_strategy else ""
                         st.markdown(
                             f'<div style="border-left:3px solid {border_color};padding:8px 12px;'
                             f'margin-bottom:10px;background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0;">'
                             f'<div style="color:{label_color};font-weight:700;font-size:0.88rem;margin-bottom:4px;">'
-                            f'Approach {cid} · {angle} · {badge}'
+                            f'Approach {html.escape(str(cid))} · {html.escape(str(angle))}'
+                            f'{html.escape(role_bits)}{html.escape(strategy_bits)} · {badge}'
                             f'</div>'
                             f'<div style="color:#e8ecff;font-size:0.9rem;line-height:1.5;">{html.escape(plan)}</div>'
                             f'</div>',
