@@ -7,6 +7,19 @@ __pycache__/
 # Runtime logs
 audio_latency_log.json
 
+# LaTeX build artifacts
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+
 # Video recordings
 *.webm
 *.mp4

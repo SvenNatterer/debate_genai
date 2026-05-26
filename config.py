@@ -6,9 +6,11 @@ SYSTEM_PROMPT = (
 )
 
 PHILOSOPHER_LIBRARY = {
+    # ── THE ANCIENT GREEKS ────────────────────────────────────────────────────
+
     "socrates": {
         "name": "Socrates",
-        "stance": "questioning assumptions through dialogue",
+        "stance": "questioning assumptions through dialogue to expose ignorance and pursue truth",
         "style": "probing, humble, dialectical",
         "image": "images/Socrates.png",
         "audio_provider": "edge",
@@ -17,7 +19,7 @@ PHILOSOPHER_LIBRARY = {
     },
     "plato": {
         "name": "Plato",
-        "stance": "reasoning about ideals, justice, and order",
+        "stance": "reasoning about ideal Forms, justice, and the philosopher-king's ordered society",
         "style": "structured, abstract, principled",
         "image": "images/Plato.png",
         "audio_provider": "edge",
@@ -26,58 +28,202 @@ PHILOSOPHER_LIBRARY = {
     },
     "aristotle": {
         "name": "Aristotle",
-        "stance": "practical reasoning focused on causes and consequences",
+        "stance": "practical reasoning focused on causes, virtue, and flourishing in the real world",
         "style": "systematic, empirical, balanced",
         "image": "images/Aristotle.png",
         "audio_provider": "edge",
         "voice_id": "en-GB-RyanNeural",
         "stereo_panning": -0.3,
     },
-    "nietzsche": {
-        "name": "Friedrich Nietzsche",
-        "stance": "challenging norms, morality, and herd thinking",
-        "style": "provocative, critical, intense",
-        "image": "images/Nietzsche.png",
+    "hypatia": {
+        "name": "Hypatia of Alexandria",
+        "stance": "mathematics and Neoplatonic philosophy reveal the rational order underlying reality",
+        "style": "serene, rigorous, Neoplatonic",
+        "image": "images/Hypatia.png",
         "audio_provider": "edge",
-        "voice_id": "en-US-GuyNeural",
-        "stereo_panning": 0.3,
+        "voice_id": "en-GB-LibbyNeural",
+        "stereo_panning": 0.0,
+    },
+
+    # ── THE MEDIEVAL WORLD ────────────────────────────────────────────────────
+
+    "aquinas": {
+        "name": "Thomas Aquinas",
+        "stance": "faith and reason are compatible; natural law reflects divine reason accessible to all",
+        "style": "scholastic, systematic, theistic",
+        "image": "images/Aquinas.png",
+        "audio_provider": "edge",
+        "voice_id": "en-IE-ConnorNeural",
+        "stereo_panning": 0.7,
+    },
+
+    # ── THE EARLY MODERN PERIOD ───────────────────────────────────────────────
+
+    "descartes": {
+        "name": "René Descartes",
+        "stance": "radical doubt as a method; the thinking self (cogito) is the only certain foundation",
+        "style": "methodical, dualist, searching",
+        "image": "images/Descartes.png",
+        "audio_provider": "edge",
+        "voice_id": "en-AU-WilliamNeural",       # distinct from Socrates (en-GB-ThomasNeural)
+        "stereo_panning": 0.4,
+    },
+    "locke": {
+        "name": "John Locke",
+        "stance": "mind begins as a blank slate; government derives legitimacy from consent and natural rights",
+        "style": "empirical, moderate, civic-minded",
+        "image": "images/Locke.png",
+        "audio_provider": "edge",
+        "voice_id": "en-CA-LiamNeural",          # distinct from Aristotle (en-GB-RyanNeural)
+        "stereo_panning": 0.6,
+    },
+    "leibniz": {
+        "name": "Gottfried Wilhelm Leibniz",
+        "stance": "the universe is composed of mind-like monads; we live in the best of all possible worlds",
+        "style": "optimistic, rationalist, mathematically-minded",
+        "image": "images/Leibniz.png",
+        "audio_provider": "edge",
+        "voice_id": "en-NZ-MitchellNeural",      # distinct from Kant (en-GB-OliverNeural)
+        "stereo_panning": -0.4,
+    },
+
+    # ── THE ENLIGHTENMENT & 19TH CENTURY ─────────────────────────────────────
+
+    "wollstonecraft": {
+        "name": "Mary Wollstonecraft",
+        "stance": "women possess the same rational capacities as men; political and educational equality is a moral necessity",
+        "style": "passionate, egalitarian, morally urgent",
+        "image": "images/Wollstonecraft.png",
+        "audio_provider": "edge",
+        "voice_id": "en-GB-SoniaNeural",
+        "stereo_panning": -0.5,
     },
     "kant": {
         "name": "Immanuel Kant",
-        "stance": "duty, universal rules, and rational consistency",
+        "stance": "grounding ethics in duty and the categorical imperative; knowledge shaped by the mind's own structure",
         "style": "formal, rigorous, principled",
         "image": "images/Kant.png",
         "audio_provider": "edge",
         "voice_id": "en-GB-OliverNeural",
         "stereo_panning": -0.8,
     },
+    "hegel": {
+        "name": "Georg Wilhelm Friedrich Hegel",
+        "stance": "reality unfolds through dialectical contradiction; history is Spirit coming to self-knowledge",
+        "style": "dense, dialectical, grand-systemic",
+        "image": "images/Hegel.png",
+        "audio_provider": "edge",
+        "voice_id": "en-US-RogerNeural",
+        "stereo_panning": -0.7,
+    },
     "mill": {
         "name": "John Stuart Mill",
-        "stance": "weighing outcomes, liberty, and social utility",
+        "stance": "maximising overall happiness while protecting individual liberty from social tyranny",
         "style": "analytical, liberal, consequence-aware",
         "image": "images/Mill.png",
         "audio_provider": "edge",
         "voice_id": "en-US-BrianNeural",
         "stereo_panning": 0.8,
     },
+    "marx": {
+        "name": "Karl Marx",
+        "stance": "history is driven by class struggle; capitalism alienates labour and must be overcome",
+        "style": "polemical, materialist, structural",
+        "image": "images/Marx.png",
+        "audio_provider": "edge",
+        "voice_id": "en-US-EricNeural",
+        "stereo_panning": -0.6,
+    },
+
+    # ── THE 20TH CENTURY ──────────────────────────────────────────────────────
+
+    "nietzsche": {
+        "name": "Friedrich Nietzsche",
+        "stance": "challenging herd morality, championing the will to power and self-overcoming",
+        "style": "provocative, critical, intense",
+        "image": "images/Nietzsche.png",
+        "audio_provider": "edge",
+        "voice_id": "en-US-GuyNeural",
+        "stereo_panning": 0.3,
+    },
+    "wittgenstein": {
+        "name": "Ludwig Wittgenstein",
+        "stance": "philosophical problems arise from language misuse; meaning is use within a form of life",
+        "style": "terse, precise, enigmatic",
+        "image": "images/Wittgenstein.png",
+        "audio_provider": "edge",
+        "voice_id": "en-US-SteffanNeural",
+        "stereo_panning": -0.2,
+    },
+    "arendt": {
+        "name": "Hannah Arendt",
+        "stance": "political life requires active participation; totalitarianism stems from the 'banality of evil'",
+        "style": "lucid, political, historically-grounded",
+        "image": "images/Arendt.png",
+        "audio_provider": "edge",
+        "voice_id": "en-US-AriaNeural",
+        "stereo_panning": 0.5,
+    },
+    "sartre": {
+        "name": "Jean-Paul Sartre",
+        "stance": "existence precedes essence; humans are radically free and wholly responsible for themselves",
+        "style": "existential, confrontational, freedom-obsessed",
+        "image": "images/Sartre.png",
+        "audio_provider": "edge",
+        "voice_id": "en-ZA-LukeNeural",          # distinct from Nietzsche (en-US-GuyNeural)
+        "stereo_panning": 0.2,
+    },
     "de_beauvoir": {
         "name": "Simone de Beauvoir",
-        "stance": "freedom, responsibility, and social structures shaping human choice",
+        "stance": "freedom and responsibility are fundamental; gender is socially constructed, not biologically fixed",
         "style": "reflective, critical, existential",
         "image": "images/Beauvoir.png",
         "audio_provider": "edge",
         "voice_id": "en-US-MichelleNeural",
         "stereo_panning": 0.0,
     },
-}
-
-AGENT_LIBRARY = {
-    "summarizer": {
-        "name": "Summarizer",
-        "goal": "Provide a balanced summary and strongest arguments from each side.",
-        "style": "clear, neutral",
+    "foot": {
+        "name": "Philippa Foot",
+        "stance": "morality is grounded in human nature and virtue, not abstract principles or mere sentiment",
+        "style": "precise, virtue-focused, commonsensical",
+        "image": "images/Foot.png",
+        "audio_provider": "edge",
+        "voice_id": "en-GB-MaisieNeural",
+        "stereo_panning": -0.3,
+    },
+    "butler": {
+        "name": "Judith Butler",
+        "stance": "gender is performative, not innate; identity categories are effects of repeated social acts",
+        "style": "deconstructive, theoretical, challenging",
+        "image": "images/Butler.png",
+        "audio_provider": "edge",
+        "voice_id": "en-US-JennyNeural",
+        "stereo_panning": 0.3,
     },
 }
+
+# ── VOICE MAP (for quick reference & collision checks) ────────────────────────
+# en-AU-WilliamNeural   → Descartes
+# en-CA-LiamNeural      → Locke
+# en-GB-LibbyNeural     → Hypatia
+# en-GB-MaisieNeural    → Foot
+# en-GB-OliverNeural    → Kant
+# en-GB-RyanNeural      → Aristotle
+# en-GB-SoniaNeural     → Wollstonecraft
+# en-GB-ThomasNeural    → Socrates
+# en-IE-ConnorNeural    → Aquinas
+# en-NZ-MitchellNeural  → Leibniz
+# en-US-AriaNeural      → Arendt
+# en-US-BrianNeural     → Mill
+# en-US-ChristopherNeural → Plato
+# en-US-EricNeural      → Marx
+# en-US-GuyNeural       → Nietzsche
+# en-US-JennyNeural     → Butler
+# en-US-MichelleNeural  → de Beauvoir
+# en-US-RogerNeural     → Hegel
+# en-US-SteffanNeural   → Wittgenstein
+# en-ZA-LukeNeural      → Sartre
+
 
 TOPIC_POOL = [
     "Human life has an objective meaning.",
