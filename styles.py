@@ -231,6 +231,38 @@ def inject_arcade_css() -> None:
             color: #e8ecff;
         }
 
+        .fighter-bio-details {
+            margin-top: 14px;
+            border-top: 1px solid rgba(255,255,255,0.10);
+            padding-top: 10px;
+        }
+
+        .fighter-bio-details summary {
+            cursor: pointer;
+            font-size: 0.78rem;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: #8ecbff;
+            text-align: center;
+            user-select: none;
+            list-style: none;
+            outline: none;
+        }
+
+        .fighter-bio-details summary::-webkit-details-marker { display: none; }
+
+        .fighter-bio-details summary::before { content: "▶  "; }
+        .fighter-bio-details[open] summary::before { content: "▼  "; }
+
+        .fighter-bio-text {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #e8ecff;
+            line-height: 1.6;
+            opacity: 0.88;
+            text-align: left;
+        }
+
         .score-card {
             background: rgba(255,255,255,0.05);
             border: 1px solid rgba(255,255,255,0.14);

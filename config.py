@@ -224,6 +224,14 @@ PHILOSOPHER_LIBRARY = {
 # en-US-SteffanNeural   → Wittgenstein
 # en-ZA-LukeNeural      → Sartre
 
+AGENT_LIBRARY = {
+    "summarizer": {
+        "name": "Summarizer",
+        "goal": "Provide a balanced summary and strongest arguments from each side.",
+        "style": "clear, neutral",
+    },
+}
+
 
 TOPIC_POOL = [
     "Human life has an objective meaning.",

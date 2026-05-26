@@ -17,6 +17,46 @@ from debate_engine_cloud import (
     summarize_debate,
 )
 
+# ── Philosopher bio guide ─────────────────────────────────────────────────────
+
+_PHILOSOPHER_BIOS: dict[str, str] | None = None
+
+
+def _load_philosopher_bios() -> dict[str, str]:
+    global _PHILOSOPHER_BIOS
+    if _PHILOSOPHER_BIOS is not None:
+        return _PHILOSOPHER_BIOS
+    guide_path = Path(__file__).parent / "philosophers_guide.md"
+    if not guide_path.exists():
+        _PHILOSOPHER_BIOS = {}
+        return _PHILOSOPHER_BIOS
+    text = guide_path.read_text(encoding="utf-8")
+    name_to_key = {v["name"]: k for k, v in PHILOSOPHER_LIBRARY.items()}
+    bios: dict[str, str] = {}
+    current_key: str | None = None
+    current_lines: list[str] = []
+
+    def _flush() -> None:
+        if current_key and current_lines:
+            bios[current_key] = "\n".join(current_lines).strip()
+
+    for line in text.splitlines():
+        if line.startswith("### "):
+            _flush()
+            current_key = None
+            current_lines = []
+            heading_text = line[4:]
+            for name, key in name_to_key.items():
+                if heading_text.startswith(name):
+                    current_key = key
+                    break
+        elif current_key is not None:
+            current_lines.append(line)
+    _flush()
+    _PHILOSOPHER_BIOS = bios
+    return bios
+
+
 # Focus instructions injected into the judge prompt per specialisation.
 # Index corresponds to judge number (0-based) for a given panel size.
 JUDGE_ROLE_LABELS = {
@@ -586,6 +626,19 @@ def render_fighter_card(philosopher_key: str, side_label: str) -> None:
     else:
         fighter_media = f'<img src="{image_src}" class="fighter-image" alt="{html.escape(philosopher["name"])}">'
 
+    bio_html = ""
+    raw_bio = _load_philosopher_bios().get(philosopher_key, "")
+    if raw_bio:
+        bio_escaped = html.escape(raw_bio)
+        bio_escaped = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', bio_escaped)
+        bio_escaped = re.sub(r'\*(.+?)\*', r'<em>\1</em>', bio_escaped)
+        bio_html = (
+            f'<details class="fighter-bio-details">'
+            f'<summary>About {html.escape(philosopher["name"])}</summary>'
+            f'<div class="fighter-bio-text">{bio_escaped}</div>'
+            f'</details>'
+        )
+
     st.markdown(
         f"""
         <div class="fighter-card">
@@ -593,6 +646,7 @@ def render_fighter_card(philosopher_key: str, side_label: str) -> None:
             <div class="fighter-name">{philosopher['name']}</div>
             <div class="fighter-side">{side_label}</div>
             <div class="fighter-stance">{philosopher['stance']}</div>
+            {bio_html}
         </div>
         """,
         unsafe_allow_html=True,
