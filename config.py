@@ -234,6 +234,7 @@ AGENT_LIBRARY = {
 
 
 TOPIC_POOL = [
+    # ── ORIGINAL ─────────────────────────────────────────────────────────────
     "Human life has an objective meaning.",
     "AI will reduce human creativity overall.",
     "Human nature is fundamentally good.",
@@ -246,6 +247,54 @@ TOPIC_POOL = [
     "The individual should submit to the common good.",
     "Certain knowledge is possible.",
     "Technological progress does more good than harm.",
+
+    # ── MIND, IDENTITY & CONSCIOUSNESS ───────────────────────────────────────
+    "A sufficiently advanced AI deserves moral consideration.",
+    "Personal identity is an illusion — there is no continuous self.",
+    "Consciousness cannot be fully explained by physical processes.",
+    "We have a moral obligation to enhance human intelligence artificially.",
+    "Memory defines who we are more than character does.",
+    "A person who has completely changed their beliefs and values is no longer the same person.",
+
+    # ── ETHICS & MORAL PHILOSOPHY ─────────────────────────────────────────────
+    "It is wrong to bring children into a world of certain suffering.",
+    "Animals have rights that humans are morally obligated to respect.",
+    "The ends never justify the means.",
+    "Moral progress is real and measurable.",
+    "Wealth beyond a certain point is morally indefensible.",
+    "We owe more to people alive today than to future generations.",
+    "Forgiveness is always a virtue.",
+    "A just society requires equal outcomes, not merely equal opportunities.",
+
+    # ── POLITICS, SOCIETY & POWER ─────────────────────────────────────────────
+    "Democracy is the worst form of government except for all the others.",
+    "The nation-state is an obstacle to human flourishing.",
+    "Radical transparency — no privacy for anyone, including governments — would make society more just.",
+    "Civil disobedience is sometimes not only justified but morally required.",
+    "The free market is structurally incapable of solving climate change.",
+    "Political leaders should be chosen by sortition — random selection from citizens — rather than election.",
+
+    # ── KNOWLEDGE, SCIENCE & REALITY ──────────────────────────────────────────
+    "Science tells us how the world is, but cannot tell us how it ought to be.",
+    "Objective truth exists independently of human perception.",
+    "The simulation hypothesis is a serious philosophical position, not science fiction.",
+    "Mathematical structures exist independently of human minds.",
+    "We are morally obligated to take low-probability, high-consequence risks seriously.",
+
+    # ── EXISTENCE, TIME & THE HUMAN CONDITION ─────────────────────────────────
+    "Death gives life its meaning — immortality would make existence pointless.",
+    "Boredom is a deeper philosophical problem than pain.",
+    "The past should constrain the present less than it currently does.",
+    "We have a duty to remember historical atrocities, even ones we had no part in.",
+    "A life fully devoted to art is more valuable than a life devoted to reducing suffering.",
+    "Language does not merely describe reality — it constructs it.",
+
+    # ── TECHNOLOGY & THE FUTURE ───────────────────────────────────────────────
+    "Social media has made collective reasoning worse, not better.",
+    "Humanity's long-term survival requires leaving Earth.",
+    "The pursuit of artificial general intelligence is reckless.",
+    "Digital relationships can be as meaningful as physical ones.",
+    "Automation makes a universal basic income not just desirable but necessary.",
 ]
 
 

@@ -1,0 +1,17 @@
+# Core UI
+streamlit>=1.57.0
+
+# LLM clients & structured outputs
+openai>=2.38.0
+instructor>=1.15.1
+pydantic>=2.13.4
+
+# Environment / config
+python-dotenv>=1.2.2
+
+# Audio (text-to-speech + playback)
+edge-tts>=7.2.8
+pygame>=2.6.1
+
+# Markdown rendering in the UI
+markdown-it-py>=4.2.0
