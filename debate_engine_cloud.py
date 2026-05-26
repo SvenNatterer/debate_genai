@@ -545,7 +545,17 @@ class DebateAgent:
         History: {history or history_label}
         """
 
-    def _respond_with_team(self, topic, history, round_idx, strategy, max_words, on_step=None):
+    def _respond_with_team(
+        self,
+        topic,
+        history,
+        round_idx,
+        strategy,
+        max_words,
+        on_step=None,
+        on_token=None,
+        on_draft_start=None,
+    ):
         context = self._team_context(topic, history, round_idx, strategy)
         trace = {"calls": [], "candidates": [], "selection": {}, "reviews": [], "revisions": [], "approved": False, "final_score": 0}
         
@@ -605,6 +615,8 @@ class DebateAgent:
         for attempt in range(1, max_attempts + 1):
             if on_step:
                 on_step(f"Speaker drafts response (Draft {attempt})...")
+            if on_draft_start:
+                on_draft_start(attempt)
             is_free = self.side == "Free Topic"
             task_name = "philosophical response" if is_free else "debate response"
             
@@ -615,6 +627,8 @@ class DebateAgent:
                 prompt = f"{context}\nPlan: {selected_plan['plan_summary']}\nRejected Draft: {current_draft}\nFeedback: {last_review['critique']}\nRole: Speaker\nTask: Revise the {task_name}. Limit: {max_words} words."
             
             def stream_callback(token):
+                if on_token:
+                    on_token(token)
                 if not hasattr(self, "_chunker"):
                     def on_sentence(sentence):
                         if not _audio_transcription_enabled():
@@ -669,10 +683,30 @@ class DebateAgent:
 
         return {"text": current_draft, "team_trace": trace}
 
-    def respond(self, topic, transcript, round_idx, strategy, max_words=120, team_mode=False, on_step=None):
+    def respond(
+        self,
+        topic,
+        transcript,
+        round_idx,
+        strategy,
+        max_words=120,
+        team_mode=False,
+        on_step=None,
+        on_token=None,
+        on_draft_start=None,
+    ):
         history = "\n".join([f"{t['speaker']}: {t['text']}" for t in transcript[-5:]])
         if team_mode:
-            return self._respond_with_team(topic, history, round_idx, strategy, max_words, on_step)
+            return self._respond_with_team(
+                topic,
+                history,
+                round_idx,
+                strategy,
+                max_words,
+                on_step,
+                on_token,
+                on_draft_start,
+            )
 
         if on_step:
             is_free = self.side == "Free Topic"
@@ -742,7 +776,7 @@ def build_agents(agent_configs):
     for idx, cfg in enumerate(agent_configs):
         philosopher = PHILOSOPHER_LIBRARY[cfg["philosopher_key"]]
         agents.append(DebateAgent(
-            key=f"agent_{idx}",
+            key=cfg.get("philosopher_key", f"agent_{idx}"),
             name=cfg.get("display_name", philosopher["name"]),
             goal=cfg.get("goal", ""),
             style=philosopher["style"],
@@ -756,7 +790,17 @@ def build_agents(agent_configs):
         ))
     return agents
 
-def run_debate(topic, rounds, player_strategies, agent_configs, max_words=120, team_mode=False, on_step=None):
+def run_debate(
+    topic,
+    rounds,
+    player_strategies,
+    agent_configs,
+    max_words=120,
+    team_mode=False,
+    on_step=None,
+    on_token=None,
+    on_draft_start=None,
+):
     transcript = []
     agents = build_agents(agent_configs)
     for r in range(1, rounds + 1):
@@ -768,14 +812,25 @@ def run_debate(topic, rounds, player_strategies, agent_configs, max_words=120, t
                 player_strategies[i], 
                 max_words, 
                 team_mode, 
-                on_step=lambda msg, agent_name=agent.name, round_idx=r: on_step(f"Round {round_idx}: {agent_name} — {msg}") if on_step else None
+                on_step=(
+                    lambda msg, agent_name=agent.name, round_idx=r:
+                    on_step(f"Round {round_idx}: {agent_name} — {msg}")
+                ) if on_step else None,
+                on_token=(
+                    lambda token, agent=agent, round_idx=r:
+                    on_token(token, agent, round_idx)
+                ) if on_token else None,
+                on_draft_start=(
+                    lambda attempt, agent=agent, round_idx=r:
+                    on_draft_start(agent, round_idx, attempt)
+                ) if on_draft_start else None,
             )
             
             if team_mode:
                 turn = {"round": r, "speaker": agent.name, "text": res["text"]}
                 if "team_trace" in res: turn["team_trace"] = res["team_trace"]
                 transcript.append(turn)
-                yield {"type": "team", "turn": turn, "transcript": transcript}
+                yield {"type": "team", "agent": agent, "turn": turn, "transcript": transcript}
             else:
                 # res is a generator
                 def intercept_generator():

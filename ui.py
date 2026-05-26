@@ -1720,7 +1720,7 @@ def render_winner_announcement() -> None:
     st.markdown(banner_html, unsafe_allow_html=True)
 
 
-def render_generation_snapshot() -> None:
+def render_generation_snapshot(include_transcript: bool = True) -> None:
     transcript = st.session_state.get("transcript", []) or []
     judge_results = st.session_state.get("judge_results", []) or []
     agent_configs = st.session_state.get("agent_configs", []) or []
@@ -1733,15 +1733,16 @@ def render_generation_snapshot() -> None:
         display_name = cfg.get("display_name") or philosopher["name"]
         avatar_by_speaker[display_name] = philosopher.get("image")
 
-    for turn in transcript:
-        speaker = turn.get("speaker", "Agent")
-        avatar = avatar_by_speaker.get(speaker)
-        if avatar:
-            message = st.chat_message(speaker, avatar=avatar)
-        else:
-            message = st.chat_message(speaker)
-        with message:
-            st.markdown(turn.get("text", ""))
+    if include_transcript:
+        for turn in transcript:
+            speaker = turn.get("speaker", "Agent")
+            avatar = avatar_by_speaker.get(speaker)
+            if avatar:
+                message = st.chat_message(speaker, avatar=avatar)
+            else:
+                message = st.chat_message(speaker)
+            with message:
+                st.markdown(turn.get("text", ""))
 
     for index, jr in enumerate(judge_results, start=1):
         if not isinstance(jr, dict):
@@ -1787,7 +1788,7 @@ def render_versus_stage() -> None:
         handle_run_debate()
         st.session_state.pop("_loading_screen_primed", None)
         if st.session_state.get("team_mode_active", False):
-            render_generation_snapshot()
+            render_generation_snapshot(include_transcript=False)
     else:
         render_generation_snapshot()
 
@@ -1964,21 +1965,60 @@ def handle_run_debate() -> None:
 
     transcript = []
     
-    # We display a spinner if we are in team mode, but for single mode we stream directly.
     if philosopher_teams:
-        spinner_text = "Free Topic Mode running..." if free_topic_mode else "Team debate is running..."
-        with st.spinner(spinner_text):
-            for item in run_debate(
-                st.session_state["selected_topic"],
-                argument_rounds,
-                player_strategies,
-                agent_configs,
-                max_words=agent_max_words,
-                team_mode=philosopher_teams,
-                on_step=None
-            ):
-                if item.get("type") == "team":
-                    transcript = item["transcript"]
+        team_status = st.empty()
+        team_message_slots: dict[tuple[int, str], object] = {}
+        team_live_text: dict[tuple[int, str], str] = {}
+
+        def clean_team_live_text(text: str) -> str:
+            return re.sub(r"<think>.*?</think>", "", str(text), flags=re.DOTALL).strip()
+
+        def ensure_team_message(agent, round_idx: int):
+            key = (round_idx, agent.name)
+            if key not in team_message_slots:
+                with st.chat_message(agent.name, avatar=agent.image):
+                    team_message_slots[key] = st.empty()
+                team_live_text[key] = ""
+            return key, team_message_slots[key]
+
+        def render_team_step(message: str) -> None:
+            team_status.caption(message)
+
+        def reset_team_draft(agent, round_idx: int, attempt: int) -> None:
+            key, slot = ensure_team_message(agent, round_idx)
+            team_live_text[key] = ""
+            slot.markdown(f"_Draft {attempt} is being generated..._")
+
+        def stream_team_token(token: str, agent, round_idx: int) -> None:
+            key, slot = ensure_team_message(agent, round_idx)
+            team_live_text[key] += token
+            display_text = clean_team_live_text(team_live_text[key])
+            slot.markdown(display_text or " ")
+
+        for item in run_debate(
+            st.session_state["selected_topic"],
+            argument_rounds,
+            player_strategies,
+            agent_configs,
+            max_words=agent_max_words,
+            team_mode=philosopher_teams,
+            on_step=render_team_step,
+            on_token=stream_team_token,
+            on_draft_start=reset_team_draft,
+        ):
+            if item.get("type") == "team":
+                turn = item["turn"]
+                agent = item.get("agent")
+                if agent:
+                    key, slot = ensure_team_message(agent, turn.get("round", 0))
+                    team_live_text[key] = turn.get("text", "")
+                    slot.markdown(
+                        clean_team_live_text(team_live_text[key])
+                        or "_No argument generated._"
+                    )
+                transcript = item["transcript"]
+
+        team_status.empty()
     else:
         # Real-time streaming for single mode!
 
