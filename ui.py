@@ -764,10 +764,19 @@ def _speaker_aliases(speaker: str) -> list[str]:
     return aliases
 
 
+def _alias_pattern(alias: str) -> str:
+    # Base-name aliases (no parens) must NOT match role-suffixed names like
+    # "Socrates (Against):" — omit the optional-parens group so "Socrates"
+    # only matches bare "Socrates:", preventing cross-speaker segment collisions.
+    if "(" in alias:
+        return rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]"
+    return rf"{re.escape(alias)}\s*[:\-–—=]"
+
+
 def _speaker_score_segment(text: str, speaker: str, speakers: list[str]) -> str:
     start_match = None
     for alias in _speaker_aliases(speaker):
-        match = re.search(rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]", text, re.IGNORECASE)
+        match = re.search(_alias_pattern(alias), text, re.IGNORECASE)
         if match and (start_match is None or match.start() < start_match.start()):
             start_match = match
     if not start_match:
@@ -779,7 +788,7 @@ def _speaker_score_segment(text: str, speaker: str, speakers: list[str]) -> str:
         if other == speaker:
             continue
         for alias in _speaker_aliases(other):
-            match = re.search(rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]", text[start:], re.IGNORECASE)
+            match = re.search(_alias_pattern(alias), text[start:], re.IGNORECASE)
             if match:
                 end = min(end, start + match.start())
 
@@ -924,7 +933,7 @@ def clean_judge_reasoning(text: str, transcript: list[dict]) -> str:
     for speaker in speakers:
         start_match = None
         for alias in _speaker_aliases(speaker):
-            match = re.search(rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]", cleaned, re.IGNORECASE)
+            match = re.search(_alias_pattern(alias), cleaned, re.IGNORECASE)
             if match and (start_match is None or match.start() < start_match.start()):
                 start_match = match
         if not start_match:
@@ -936,7 +945,7 @@ def clean_judge_reasoning(text: str, transcript: list[dict]) -> str:
             if other == speaker:
                 continue
             for alias in _speaker_aliases(other):
-                match = re.search(rf"{re.escape(alias)}\s*(?:\([^)]*\))?\s*[:\-–—=]", cleaned[start:], re.IGNORECASE)
+                match = re.search(_alias_pattern(alias), cleaned[start:], re.IGNORECASE)
                 if match:
                     end = min(end, start + match.start())
 
