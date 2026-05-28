@@ -3,6 +3,7 @@
 .env
 __pycache__/
 *.pyc
+scratch/
 
 # Runtime logs
 audio_latency_log.json
