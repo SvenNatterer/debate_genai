@@ -11,6 +11,9 @@
                 "group": "screenshot-sync"
             },
             "isBackground": true,
+            "runOptions": {
+                "runOn": "folderOpen"
+            },
             "problemMatcher": []
         }
     ]

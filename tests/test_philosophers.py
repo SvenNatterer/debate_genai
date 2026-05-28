@@ -108,6 +108,12 @@ PHILOSOPHER_KEYWORDS = {
                     "pleasure", "pain", "freedom", "society", "individual", "welfare"],
     "de_beauvoir": ["freedom", "other", "situation", "existence", "woman", "responsibility",
                     "choice", "authenticity", "oppression", "gender", "transcend"],
+    "sartre":      ["freedom", "existence", "choice", "responsibility", "bad faith", "essence",
+                    "condemned", "existential", "nausea", "abyss"],
+    "arendt":      ["political", "action", "plurality", "banality", "evil", "totalitarianism",
+                    "think", "labor", "work", "freedom", "public sphere"],
+    "marx":        ["struggle", "class", "capital", "labor", "alienat", "bourgeoisie",
+                    "proletariat", "materialist", "exploit", "revolution", "commodity", "system"],
 }
 
 def _check_personality(philosopher_key: str, text: str) -> tuple[bool, List[str]]:
@@ -165,7 +171,7 @@ def _build_philosopher_prompt(
     )
 
 
-def test_philosopher_argument(
+def _test_philosopher_argument(
     philosopher_key: str,
     side: str,
     topic: str,
@@ -208,7 +214,7 @@ def test_philosopher_argument(
     )
 
 
-def test_judge(
+def _test_judge(
     topic: str,
     transcript: List[dict],
     provider: str,
@@ -336,7 +342,7 @@ def run_test_suite(
         for phil_key, side in philosophers:
             phil_name = PHILOSOPHER_LIBRARY[phil_key]["name"]
             print(f"\n  {_info(f'Testing {phil_name} ({side})...')}")
-            r = test_philosopher_argument(
+            r = _test_philosopher_argument(
                 philosopher_key=phil_key,
                 side=side,
                 topic=topic,
@@ -362,7 +368,7 @@ def run_test_suite(
     # Judge evaluation
     _section("Judge Evaluation")
     print(f"\n  {_info('Running judge evaluation...')}")
-    judge_result = test_judge(topic, transcript, provider, model)
+    judge_result = _test_judge(topic, transcript, provider, model)
     _print_judge_result(judge_result)
 
     # Summary

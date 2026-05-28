@@ -50,6 +50,10 @@ def _load_philosopher_bios() -> dict[str, str]:
                 if heading_text.startswith(name):
                     current_key = key
                     break
+        elif line.startswith("## ") or line.strip() == "---":
+            _flush()
+            current_key = None
+            current_lines = []
         elif current_key is not None:
             current_lines.append(line)
     _flush()
@@ -611,8 +615,9 @@ def render_topic_panel(topic: str, small: bool = False) -> None:
 def render_fighter_card(philosopher_key: str, side_label: str) -> None:
     philosopher = PHILOSOPHER_LIBRARY[philosopher_key]
     image_src = image_to_data_uri(philosopher["image"])
-    sprite_path = Path("images/Nietzsche_idle_strip.png")
-    if philosopher_key == "nietzsche" and sprite_path.exists():
+    portrait_path = Path(philosopher["image"])
+    sprite_path = portrait_path.with_name(f"{portrait_path.stem}_idle_strip.png")
+    if sprite_path.exists():
         sprite_src = image_to_data_uri(str(sprite_path))
         fighter_media = (
             f'<div class="fighter-animation-stage">'
@@ -640,15 +645,13 @@ def render_fighter_card(philosopher_key: str, side_label: str) -> None:
         )
 
     st.markdown(
-        f"""
-        <div class="fighter-card">
-            {fighter_media}
-            <div class="fighter-name">{philosopher['name']}</div>
-            <div class="fighter-side">{side_label}</div>
-            <div class="fighter-stance">{philosopher['stance']}</div>
-            {bio_html}
-        </div>
-        """,
+        f'<div class="fighter-card">'
+        f'{fighter_media}'
+        f'<div class="fighter-name">{philosopher["name"]}</div>'
+        f'<div class="fighter-side">{side_label}</div>'
+        f'<div class="fighter-stance">{philosopher["stance"]}</div>'
+        f'{bio_html}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
