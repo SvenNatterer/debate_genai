@@ -1762,7 +1762,7 @@ def render_winner_announcement() -> None:
         return
         
     winner = judgment.get("winner", "N/A")
-    if not winner or winner in ("N/A", "Error", ""):
+    if not winner or winner in ("N/A", "Error", "", "Draw"):
         winner = "Tie / Split Decision"
         
     icons_html = '<div style="display: flex; align-items: center; margin-right: 15px;">'
@@ -1885,11 +1885,25 @@ def extract_winner(text: str, transcript: list) -> str:
     match = re.search(r"(?:winner|gewinner):\s*\*?\*?([^\n\*\#]+)", text, re.IGNORECASE)
     if match:
         winner_candidate = match.group(1).strip()
-        winner_candidate = re.sub(r"[\*\#\(\)]+", "", winner_candidate).strip()
+        # Strip only markdown formatting — keep parentheses so role suffixes like
+        # "(For)" / "(Against)" survive and distinguish same-philosopher speakers.
+        winner_candidate = re.sub(r"[\*\#]+", "", winner_candidate).strip()
+        # Pass through an explicit Draw verdict immediately.
+        if winner_candidate.lower() in ("draw", "unentschieden", "tie"):
+            return "Draw"
+        # Pick the speaker whose longest alias matches the candidate; longest alias
+        # wins so "Wittgenstein (Against)" beats bare "Wittgenstein".
+        best_speaker = None
+        best_len = -1
         for speaker in speakers:
             for alias in _speaker_aliases(speaker):
-                if alias.lower() in winner_candidate.lower() or winner_candidate.lower() in alias.lower():
-                    return speaker
+                a, c = alias.lower(), winner_candidate.lower()
+                if a in c or c in a:
+                    if len(alias) > best_len:
+                        best_len = len(alias)
+                        best_speaker = speaker
+        if best_speaker:
+            return best_speaker
 
     low_text = text.lower()
     for speaker in speakers:

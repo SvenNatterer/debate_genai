@@ -319,6 +319,7 @@ def chat_completion(
     response_model: Optional[Type[T]] = None,
     stream_generator: bool = False,
     stream_callback: Optional[Callable[[str], None]] = None,
+    temperature: Optional[float] = None,
 ) -> Any:
     if not provider or not model:
         return "[ERROR] Missing model/provider"
@@ -327,12 +328,13 @@ def chat_completion(
 
     try:
         client, mode, raw_client = _get_instructor_client(provider, model)
-        
-        # Determine temperature
-        if response_model:
-            temperature = 0.1 if is_small_model else 0.2
-        else:
-            temperature = 0.7
+
+        # Determine temperature — caller may override via the temperature kwarg
+        if temperature is None:
+            if response_model:
+                temperature = 0.1 if is_small_model else 0.2
+            else:
+                temperature = 0.7
 
         # Inject JSON template example for smaller models
         if response_model and is_small_model:
@@ -947,73 +949,56 @@ def run_debate(
 
 def judge_debate(topic, transcript, judge_provider="", judge_model="", focus=""):
     history = "\n".join([f"{t['speaker']}: {t['text']}" for t in transcript])
-    
+
     sys_prompt = SYSTEM_PROMPT
     if focus:
         sys_prompt = f"{SYSTEM_PROMPT} {focus}"
 
+    speakers = list(dict.fromkeys(t["speaker"] for t in transcript))
+    speaker_list = " vs ".join(speakers)
+
     prompt = (
-        f"You are the debate judge. Evaluate the following debate on the topic: '{topic}'.\n\n"
+        f"You are a strict debate judge. Evaluate this debate on: '{topic}'.\n"
+        f"Speakers: {speaker_list}\n\n"
         f"--- DEBATE TRANSCRIPT ---\n{history}\n"
         f"--- END OF TRANSCRIPT ---\n\n"
-        f"Task: Write a brief evaluation containing the speaker scores and exactly one sentence of justification (Reasoning) for your decision.\n"
-        f"Rules:\n"
-        f"1. You MUST score each speaker from 0 to 10 for logical validity, argument strength, counterargument handling, clarity, relevance, and overall total.\n"
-        f"2. You MUST state all these scores in the following exact format for each speaker:\n"
+        f"SCORING SCALE — apply this exactly:\n"
+        f"  9-10: Exceptional (rare — outstanding logic, evidence, and rhetoric)\n"
+        f"  7-8:  Good (clear, well-reasoned, mostly effective)\n"
+        f"  5-6:  Average (adequate but unremarkable)\n"
+        f"  3-4:  Weak (noticeable flaws, thin reasoning, or missed opportunities)\n"
+        f"  0-2:  Poor (major logical errors, incoherent, or off-topic)\n\n"
+        f"MANDATORY RULES:\n"
+        f"1. Score each speaker on: logical validity, argument strength, counterargument handling, clarity, relevance (each 0-10).\n"
+        f"2. The overall total for each speaker is the SUM of their 5 scores (max 50).\n"
+        f"3. If the totals are genuinely equal, you may declare a draw — write 'Winner: Draw'.\n"
+        f"4. Use the EXACT format for each speaker (no extra text on these lines):\n"
         f"[Speaker Name]: [score]/10 logical validity, [score]/10 argument strength, [score]/10 counterargument handling, [score]/10 clarity, [score]/10 relevance, [score]/50 overall total.\n"
-        f"3. You MUST provide exactly ONE sentence of justification (Reasoning) explaining the decision/scores in this format:\n"
-        f"Reasoning: [One sentence of reasoning].\n"
-        f"4. Do NOT write any other paragraphs or long analysis. Keep the prose very brief: just the scores and the single-sentence justification.\n"
-        f"5. At the very end of your response, on a new line, write the winner in the exact format: 'Winner: [Speaker Name]'"
+        f"5. After the scores, write 2-3 sentences of reasoning that explain your decision:\n"
+        f"   - Sentence 1: Identify the strongest argument or moment from the winner (or highlight parity if a draw).\n"
+        f"   - Sentence 2: Identify the key weakness or missed opportunity from the other speaker.\n"
+        f"   - Sentence 3 (optional): Explain any notable score differences between specific metrics.\n"
+        f"   Format: Reasoning: [Your 2-3 sentences here].\n"
+        f"6. Final line only: Winner: [Speaker Name or Draw]"
     )
     return chat_completion(
-        sys_prompt, 
-        prompt, 
-        provider=judge_provider, 
-        model=judge_model, 
-        response_model=None, 
-        stream_generator=True
+        sys_prompt,
+        prompt,
+        provider=judge_provider,
+        model=judge_model,
+        response_model=None,
+        stream_generator=True,
+        temperature=0.0,
     )
 
 def aggregate_judgments(judgments):
     if not judgments:
         return None
-    
-    # 1. Determine winner by majority vote
-    winner_votes = {}
-    for j in judgments:
-        if not j or not isinstance(j, dict):
-            continue
-        w = j.get("winner")
-        if isinstance(w, str):
-            w = w.strip()
-            if w and w.lower() not in ("n/a", "error", ""):
-                key = w.lower()
-                if key not in winner_votes:
-                    winner_votes[key] = {"name": w, "count": 0}
-                winner_votes[key]["count"] += 1
-            
-    # Find speaker with max votes
-    best_winner = None
-    max_votes = -1
-    for key, info in winner_votes.items():
-        if info["count"] > max_votes:
-            max_votes = info["count"]
-            best_winner = info["name"]
-            
-    if not best_winner:
-        # Fallback to first judgment winner
-        for j in judgments:
-            if j and isinstance(j, dict) and j.get("winner"):
-                best_winner = j.get("winner")
-                break
-        if not best_winner:
-            best_winner = "N/A"
-        
-    # 2. Average the scores
+
+    # 1. Average the scores first — needed as tiebreaker for split votes.
     speaker_score_sums = {}
     speaker_score_counts = {}
-    
+
     for j in judgments:
         if not j or not isinstance(j, dict) or not isinstance(j.get("scores"), dict):
             continue
@@ -1033,8 +1018,7 @@ def aggregate_judgments(judgments):
                     speaker_score_counts[speaker][metric] = speaker_score_counts[speaker].get(metric, 0) + 1
                 except Exception:
                     pass
-                    
-    # Rebuild averaged scores
+
     aggregated_scores = {}
     for speaker, metrics in speaker_score_sums.items():
         aggregated_scores[speaker] = {}
@@ -1042,19 +1026,67 @@ def aggregate_judgments(judgments):
             count = speaker_score_counts[speaker].get(metric, 0)
             avg_val = total_sum / count if count > 0 else 0.0
             denominator = 50 if metric == "total" else 10
-            
             if avg_val.is_integer():
                 avg_str = f"{int(avg_val)}/{denominator}"
             else:
                 avg_str = f"{avg_val:.1f}/{denominator}"
             aggregated_scores[speaker][metric] = avg_str
-            
-    # Combine reasoning
+
+    def _avg_total(speaker: str) -> float:
+        metrics = aggregated_scores.get(speaker, {})
+        val_str = metrics.get("total", "0/50")
+        try:
+            return float(val_str.split("/")[0])
+        except Exception:
+            return 0.0
+
+    # 2. Determine winner by majority vote; break ties with averaged total score.
+    winner_votes: dict = {}
+    for j in judgments:
+        if not j or not isinstance(j, dict):
+            continue
+        w = j.get("winner")
+        if isinstance(w, str):
+            w = w.strip()
+            if w and w.lower() not in ("n/a", "error", ""):
+                key = w.lower()
+                if key not in winner_votes:
+                    winner_votes[key] = {"name": w, "count": 0}
+                winner_votes[key]["count"] += 1
+
+    best_winner = None
+    if winner_votes:
+        max_votes = max(info["count"] for info in winner_votes.values())
+        tied = [info["name"] for info in winner_votes.values() if info["count"] == max_votes]
+        if len(tied) == 1:
+            best_winner = tied[0]
+        else:
+            # Vote tie — use averaged total score as tiebreaker.
+            totals = {name: _avg_total(name) for name in tied}
+            scores_list = list(totals.values())
+            if len(scores_list) >= 2 and scores_list[0] == scores_list[1] and len(set(scores_list)) == 1:
+                best_winner = "Draw"
+            else:
+                best_winner = max(totals, key=totals.get)
+
+    if not best_winner:
+        # Fallback: no valid winner votes — compare scores directly.
+        if aggregated_scores:
+            totals = {s: _avg_total(s) for s in aggregated_scores}
+            scores_list = list(totals.values())
+            if len(set(scores_list)) == 1:
+                best_winner = "Draw"
+            else:
+                best_winner = max(totals, key=totals.get)
+        else:
+            best_winner = "Draw"
+
+    # 3. Combine reasoning
     combined_reasoning = ""
     for idx, j in enumerate(judgments):
         if j and isinstance(j, dict) and j.get("reasoning"):
             combined_reasoning += f"**Judge {idx+1}**: {j['reasoning']}\n\n"
-            
+
     return {
         "winner": best_winner,
         "reasoning": combined_reasoning.strip(),
