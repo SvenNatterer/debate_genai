@@ -1,8 +1,7 @@
 # Fdb version 4
-["pdflatex"] 1779888683.46922 "/Users/svennatterer/Documents/GitHub/Uni/debate_ai/report/philosopher_debate_report.tex" "philosopher_debate_report.pdf" "philosopher_debate_report" 1779888684.21022 0
-  "/Users/svennatterer/Documents/GitHub/Uni/debate_ai/report/philosopher_debate_report.tex" 1779888683.08359 22903 4a221e6801288024d62a2ac8c0e31174 ""
+["pdflatex"] 1779978985.53224 "/Users/svennatterer/Documents/GitHub/Uni/debate_ai/report/philosopher_debate_report.tex" "philosopher_debate_report.pdf" "philosopher_debate_report" 1779978986.1458 0
+  "/Users/svennatterer/Documents/GitHub/Uni/debate_ai/report/philosopher_debate_report.tex" 1779976671.23444 16312 d5ec3ce75018412e5ac4c17aebdbd602 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/lm/lm-ec.enc" 1254269338 2375 baa924870cfb487815765f9094cf3728 ""
-  "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/lm/lm-ts1.enc" 1254269338 3031 6c4d3515bf7115d8518af1c9ab97ca44 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/tfm/jknappen/ec/ecrm1095.tfm" 1136768653 3584 929cdff2b7a8c11bd4d49fd68cb0ae70 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmr10.tfm" 1136768653 1296 45809c5a464d5f32c8f98ba97c1bb47f ""
@@ -25,7 +24,6 @@
   "/usr/local/texlive/2024/texmf-dist/fonts/tfm/public/lm/rm-lmr12.tfm" 1254269338 11888 6841b91e46b65cf41a49b160e6e74130 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/tfm/public/lm/rm-lmr6.tfm" 1254269338 11836 e3b6ce3e601aec94f64a536e7f4224d5 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/tfm/public/lm/rm-lmr8.tfm" 1254269338 11864 309fd7f43e4a0ba39f6f7644d76e8edf ""
-  "/usr/local/texlive/2024/texmf-dist/fonts/tfm/public/lm/ts1-lmr10.tfm" 1254269338 1556 b86d923e6b2f9aab2e313098a95cb0b8 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/lm/lmbx10.pfb" 1255129361 121021 1bf809ce4a594679006bd72263eba59b ""
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/lm/lmbx12.pfb" 1255129361 116908 1fca96723793882c2e0160350c192fc8 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/type1/public/lm/lmr10.pfb" 1255129361 119235 f35b44530a1d90eb90fe15d9cba67ea0 ""
@@ -46,6 +44,7 @@
   "/usr/local/texlive/2024/texmf-dist/tex/generic/pdfescape/pdfescape.sty" 1576015897 19007 15924f7228aca6c6d184b115f4baa231 ""
   "/usr/local/texlive/2024/texmf-dist/tex/generic/pdftexcmds/pdftexcmds.sty" 1593379760 20089 80423eac55aa175305d35b49e04fe23b ""
   "/usr/local/texlive/2024/texmf-dist/tex/generic/uniquecounter/uniquecounter.sty" 1576624663 7008 f92eaa0a3872ed622bbf538217cd2ab7 ""
+  "/usr/local/texlive/2024/texmf-dist/tex/latex/appendix/appendix.sty" 1581200180 8878 d9f65b39ca82f1d70030390eca653b1c ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/atveryend/atveryend.sty" 1576191570 19336 ce7ae9438967282886b3b036cfad1e4d ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/auxhook/auxhook.sty" 1576625391 3935 57aa3c3e203a5c2effb4d2bd2efbc323 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/base/article.cls" 1705352648 20144 147463a6a579f4597269ef9565205cfe ""
@@ -88,7 +87,6 @@
   "/usr/local/texlive/2024/texmf-dist/tex/latex/lm/ot1lmr.fd" 1616454256 1882 28c08db1407ebff35a658fd141753d16 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/lm/t1lmr.fd" 1616454256 1867 996fe743d88a01aca041ed22cc10e1bb ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/lm/t1lmtt.fd" 1616454256 2682 555da1faa2e266801e4b221d01a42cb5 ""
-  "/usr/local/texlive/2024/texmf-dist/tex/latex/lm/ts1lmr.fd" 1616454256 1914 884882d7ebb0fd65cea93fca77ff6f5a ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/refcount/refcount.sty" 1576624809 9878 9e94e8fa600d95f9c7731bb21dfb67a4 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/rerunfilecheck/rerunfilecheck.sty" 1657483315 9714 ba3194bd52c8499b3f1e3eb91d409670 ""
   "/usr/local/texlive/2024/texmf-dist/tex/latex/setspace/setspace.sty" 1670275497 22490 8cac309b79a4c53a4ffce4b1b07aead0 ""
@@ -98,9 +96,10 @@
   "/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1737717982.31633 5467645 128b85b7cde5f5edc5cb7f1dd7ff8736 ""
   "/usr/local/texlive/2024/texmf-var/web2c/pdftex/pdflatex.fmt" 1737717941 8221422 71975e0b5739d0ad1d44823950970ca5 ""
   "/usr/local/texlive/2024/texmf.cnf" 1710266656 577 e590dabc9e28c5b61546e15f63eebcdf ""
-  "philosopher_debate_report.aux" 1779888684.1367 2361 e4ef993fa4bf69bb5f1b2d073759b7cc "pdflatex"
-  "philosopher_debate_report.out" 1779888684.13711 1918 f37e6d6b9a00c093b9bd51f4872f11df "pdflatex"
-  "philosopher_debate_report.tex" 1779888683.08359 22903 4a221e6801288024d62a2ac8c0e31174 ""
+  "agent_architecture.png" 1779978984.73208 577003 1c40beb38c15c4e18b19867b39fac96d ""
+  "philosopher_debate_report.aux" 1779978986.08225 2902 a8e0f9663ed6621ac3f1d4438fc2c989 "pdflatex"
+  "philosopher_debate_report.out" 1779978986.0827 1766 3c37f298cc2bc30c14db248de2287760 "pdflatex"
+  "philosopher_debate_report.tex" 1779976671.23444 16312 d5ec3ce75018412e5ac4c17aebdbd602 ""
   (generated)
   "philosopher_debate_report.aux"
   "philosopher_debate_report.log"

@@ -115,16 +115,16 @@ MAX_ARGUMENT_ROUNDS = 5
 TEAM_SIDE_KEYS = ("for", "against")
 TEAM_CONFIG_SIDE_KEYS = ("for", "against", "free")
 TEAM_SIDE_LABELS = {
-    "for": "For team",
-    "against": "Against team",
+    "for": "Supporting team",
+    "against": "Counter team",
     "free": "Free topic team",
 }
 TEAM_ROLE_DEFS = (
-    ("agent_a", "Agent A", "socrates"),
-    ("agent_b", "Agent B", "nietzsche"),
-    ("reviewer", "Reviewer", "aristotle"),
+    ("agent_a", "Strategist A", "socrates"),
+    ("agent_b", "Strategist B", "nietzsche"),
+    ("reviewer", "Critic & Speaker", "aristotle"),
 )
-TEAM_DEFAULTS_VERSION = 3
+TEAM_DEFAULTS_VERSION = 4
 
 
 def _local_model_label() -> str:
@@ -174,7 +174,7 @@ def reset_game() -> None:
     st.session_state.setdefault("num_judges", 1)
     st.session_state["agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
     st.session_state["developer_mode"] = False
-    st.session_state["audio_transcription"] = True
+    st.session_state["audio_transcription"] = False
     st.session_state["speaker_speed"] = 1.0
     st.session_state["philosopher_teams"] = False
     st.session_state["start_mode"] = "single"
@@ -186,7 +186,7 @@ def reset_game() -> None:
     st.session_state["_pref_agent_max_words"] = DEFAULT_AGENT_MAX_WORDS
     st.session_state["_pref_rounds"] = DEFAULT_ARGUMENT_ROUNDS
     st.session_state["_pref_developer_mode"] = False
-    st.session_state["_pref_audio_transcription"] = True
+    st.session_state["_pref_audio_transcription"] = False
     st.session_state["_pref_speaker_speed"] = 1.0
     st.session_state["_pref_philosopher_teams"] = False
     st.session_state["_pref_start_mode"] = "single"
@@ -264,7 +264,7 @@ def _save_debate_params(
     st.session_state["_dp_audio_transcription"] = _session_bool(
         "_pref_audio_transcription",
         "audio_transcription",
-        default=True,
+        default=False,
     )
     st.session_state["_dp_speaker_speed"] = float(
         st.session_state.get("_pref_speaker_speed")
@@ -335,7 +335,7 @@ def ensure_session_state() -> None:
     # include_summary removed — summary is always generated
     st.session_state.setdefault("agent_max_words", DEFAULT_AGENT_MAX_WORDS)
     st.session_state.setdefault("developer_mode", False)
-    st.session_state.setdefault("audio_transcription", True)
+    st.session_state.setdefault("audio_transcription", False)
     st.session_state.setdefault("speaker_speed", 1.0)
     st.session_state.setdefault("philosopher_teams", False)
     st.session_state.setdefault("start_mode", "single")
@@ -352,7 +352,7 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("_pref_agent_max_words", DEFAULT_AGENT_MAX_WORDS)
     st.session_state.setdefault("_pref_rounds", DEFAULT_ARGUMENT_ROUNDS)
     st.session_state.setdefault("_pref_developer_mode", False)
-    st.session_state.setdefault("_pref_audio_transcription", True)
+    st.session_state.setdefault("_pref_audio_transcription", False)
     st.session_state.setdefault("_pref_speaker_speed", 1.0)
     st.session_state.setdefault("_pref_philosopher_teams", False)
     st.session_state.setdefault("_pref_team_max_review_attempts", 3)
@@ -1140,16 +1140,11 @@ def render_team_traces_panel(entries: list[dict]) -> None:
             )
             if score_rows:
                 st.table(score_rows)
-            else:
-                st.caption("No candidate scores captured.")
 
-            st.markdown("**Selection**")
-            st.write(
-                _dev_text(
-                    selection.get("selection_reasoning", "") if isinstance(selection, dict) else "",
-                    900,
-                ) or "No selection summary captured."
-            )
+            selection_reasoning = selection.get("selection_reasoning", "") if isinstance(selection, dict) else ""
+            if selection_reasoning:
+                st.markdown("**Selection**")
+                st.write(_dev_text(selection_reasoning, 900))
 
             st.markdown("**Review reasoning**")
             if reviews:
@@ -1298,14 +1293,14 @@ def render_team_character_selection() -> tuple[str, str]:
                     )
 
     team_configs = _team_configs_from_state()
-    agent1_name = team_configs["for"]["agent_a"]["philosopher_name"]
-    agent2_name = team_configs["against"]["agent_a"]["philosopher_name"]
+    agent1_name = team_configs["for"]["reviewer"]["philosopher_name"]
+    agent2_name = team_configs["against"]["reviewer"]["philosopher_name"]
     st.session_state["agent1_philosopher_name"] = agent1_name
     st.session_state["agent2_philosopher_name"] = agent2_name
     st.session_state["ui_agent1_philosopher_name"] = agent1_name
     st.session_state["ui_agent2_philosopher_name"] = agent2_name
-    st.session_state["player1_strategy"] = team_configs["for"]["agent_a"]["strategy"]
-    st.session_state["player2_strategy"] = team_configs["against"]["agent_a"]["strategy"]
+    st.session_state["player1_strategy"] = team_configs["for"]["reviewer"]["strategy"]
+    st.session_state["player2_strategy"] = team_configs["against"]["reviewer"]["strategy"]
     st.session_state["_pref_team_configs"] = team_configs
     return agent1_name, agent2_name
 
@@ -1344,11 +1339,11 @@ def render_free_team_character_selection() -> str:
             render_fighter_card(selected_key, f"{role_label} • {TEAM_SIDE_LABELS[side]}")
 
     team_configs = _team_configs_from_state()
-    agent_name = team_configs["free"]["agent_a"]["philosopher_name"]
+    agent_name = team_configs["free"]["reviewer"]["philosopher_name"]
     st.session_state["agent1_philosopher_name"] = agent_name
     st.session_state["agent2_philosopher_name"] = ""
     st.session_state["ui_agent1_philosopher_name"] = agent_name
-    st.session_state["player1_strategy"] = team_configs["free"]["agent_a"]["strategy"]
+    st.session_state["player1_strategy"] = team_configs["free"]["reviewer"]["strategy"]
     st.session_state["_pref_team_configs"] = team_configs
     return agent_name
 
@@ -1370,7 +1365,7 @@ def _save_start_preferences(philosopher_teams: bool, start_mode: str) -> None:
     st.session_state["_pref_developer_mode"] = st.session_state.get("developer_mode", False)
     st.session_state["_pref_audio_transcription"] = _session_bool(
         "audio_transcription",
-        default=True,
+        default=False,
     )
     st.session_state["_pref_speaker_speed"] = float(
         st.session_state.get("speaker_speed", 1.0) or 1.0
@@ -1681,11 +1676,11 @@ def render_character_stage() -> None:
         judge_roles = JUDGE_ROLE_LABELS[num_judges]
         rows = (
             f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-            f'<span style="color:#e8ecff;">{agent1_name} <span style="color:#aaa;font-size:0.8rem;">(For)</span></span>'
+            f'<span style="color:#e8ecff;">{agent1_name} <span style="color:#aaa;font-size:0.8rem;">(Supporting)</span></span>'
             f'<span style="color:#ffd54a;font-size:0.85rem;">{agent1_model_label}</span>'
             f'</div>'
             f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-            f'<span style="color:#e8ecff;">{agent2_name} <span style="color:#aaa;font-size:0.8rem;">(Against)</span></span>'
+            f'<span style="color:#e8ecff;">{agent2_name} <span style="color:#aaa;font-size:0.8rem;">(Counter)</span></span>'
             f'<span style="color:#ffd54a;font-size:0.85rem;">{agent2_model_label}</span>'
             f'</div>'
         )
@@ -1954,7 +1949,7 @@ def handle_run_debate() -> None:
         "_dp_audio_transcription",
         "_pref_audio_transcription",
         "audio_transcription",
-        default=True,
+        default=False,
     )
     audio_output       = audio_transcription
     audio_autoplay     = True
@@ -2026,7 +2021,8 @@ def handle_run_debate() -> None:
                 "provider":    agent1_provider,
                 "model":       agent1_model,
                 "model_label": agent1_model_label,
-                "display_name": f"{agent1_name} (For)",
+                "display_name": f"{agent1_name} (Supporting)",
+                "side":        "Supporting",
                 "team_config": for_team_config,
             },
             {
@@ -2035,7 +2031,8 @@ def handle_run_debate() -> None:
                 "provider":    agent2_provider,
                 "model":       agent2_model,
                 "model_label": agent2_model_label,
-                "display_name": f"{agent2_name} (Against)",
+                "display_name": f"{agent2_name} (Counter)",
+                "side":        "Counter",
                 "team_config": against_team_config,
             },
         ]
@@ -2047,14 +2044,15 @@ def handle_run_debate() -> None:
     
     if philosopher_teams:
         team_status = st.empty()
-        team_message_slots: dict[tuple[int, str], object] = {}
-        team_live_text: dict[tuple[int, str], str] = {}
+        team_message_slots: dict[tuple[int, str, str], object] = {}
+        team_live_text: dict[tuple[int, str, str], str] = {}
 
         def clean_team_live_text(text: str) -> str:
             return re.sub(r"<think>.*?</think>", "", str(text), flags=re.DOTALL).strip()
 
         def ensure_team_message(agent, round_idx: int):
-            key = (round_idx, agent.name)
+            side = getattr(agent, "side", "")
+            key = (round_idx, side, agent.name)
             if key not in team_message_slots:
                 with st.chat_message(agent.name, avatar=agent.image):
                     team_message_slots[key] = st.empty()
@@ -2200,7 +2198,7 @@ def handle_run_debate() -> None:
                                 "_dp_audio_transcription",
                                 "_pref_audio_transcription",
                                 "audio_transcription",
-                                default=True,
+                                default=False,
                             ):
                                 return
                             if get_audio_manager().is_running:
@@ -2372,11 +2370,11 @@ def render_arena_stage() -> None:
         else:
             rows = (
                 f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-                f'<span style="color:#e8ecff;">{phil1} (For)</span>'
+                f'<span style="color:#e8ecff;">{phil1} (Supporting)</span>'
                 f'<span style="color:#ffd54a; font-size:0.85rem;">{label1}</span>'
                 f'</div>'
                 f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-                f'<span style="color:#e8ecff;">{phil2} (Against)</span>'
+                f'<span style="color:#e8ecff;">{phil2} (Counter)</span>'
                 f'<span style="color:#ffd54a; font-size:0.85rem;">{label2}</span>'
                 f'</div>'
             )
