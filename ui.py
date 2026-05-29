@@ -2665,21 +2665,22 @@ def render_summary_stage() -> None:
                         cid = c.get("id", "?")
                         angle = c.get("angle", "")
                         plan = c.get("plan_summary", "No summary available.")
-                        role_key = "agent_a" if cid == "A" else "agent_b" if cid == "B" else ""
+                        role_key = "agent_a" if cid.startswith("A") else "agent_b" if cid.startswith("B") else ""
                         role = team_roles.get(role_key, {}) if isinstance(team_roles, dict) else {}
                         role_name = c.get("role_philosopher") or role.get("philosopher", "")
                         role_strategy = c.get("role_strategy") or role.get("strategy", "")
-                        is_selected = cid == selected_id
+                        is_selected = (cid == f"{selected_id} (Attempt {len(reviews)})") if reviews else (cid == selected_id)
                         border_color = "#ffd54a" if is_selected else "#444"
                         label_color = "#ffd54a" if is_selected else "#888"
                         badge = "Selected ✓" if is_selected else "Not selected ✗"
                         role_bits = f" · {role_name}" if role_name else ""
                         strategy_bits = f" · {role_strategy}" if role_strategy else ""
+                        angle_bits = f" · {angle}" if angle else ""
                         st.markdown(
                             f'<div style="border-left:3px solid {border_color};padding:8px 12px;'
                             f'margin-bottom:10px;background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0;">'
                             f'<div style="color:{label_color};font-weight:700;font-size:0.88rem;margin-bottom:4px;">'
-                            f'Approach {html.escape(str(cid))} · {html.escape(str(angle))}'
+                            f'Approach {html.escape(str(cid))}{html.escape(angle_bits)}'
                             f'{html.escape(role_bits)}{html.escape(strategy_bits)} · {badge}'
                             f'</div>'
                             f'<div style="color:#e8ecff;font-size:0.9rem;line-height:1.5;">{html.escape(plan)}</div>'
