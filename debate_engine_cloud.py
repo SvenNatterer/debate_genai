@@ -484,13 +484,14 @@ def chat_completion(
 
 def _record_usage(prompt: str, provider: str, model: str, usage: Any, completion_text: str = ""):
     label = "Model call"
-    if prompt.lstrip().startswith("Summarize this "): label = "Summary"
+    if "Role: Support" in prompt: label = "Support"
+    elif "Role: Counter" in prompt: label = "Counter"
+    elif "Role: Critic" in prompt: label = "Critic"
+    elif "Role: Speaker" in prompt: label = "Speaker"
+    elif prompt.lstrip().startswith("Summarize this "): label = "Summary"
     elif "Judge" in prompt or "judge" in prompt: label = "Judge"
     elif "Critic" in prompt: label = "Critic"
-    elif "Role: Support" in prompt: label = "Support"
-    elif "Role: Counter" in prompt: label = "Counter"
     elif "Strategist" in prompt: label = "Strategist"
-    elif "Role: Speaker" in prompt: label = "Speaker"
 
     pt = _usage_value(usage, "prompt_tokens", "prompt_eval_count", "input_tokens")
     ct = _usage_value(usage, "completion_tokens", "eval_count", "output_tokens")
@@ -562,6 +563,16 @@ class DebateAgent:
                 "strategy": str(role.get("strategy", "-")),
             }
         return roles
+
+    def get_supporting_name(self) -> str:
+        from config import PHILOSOPHER_LIBRARY
+        role_cfg = self.team_config.get("agent_a", {})
+        p_key = role_cfg.get("philosopher_key", "socrates")
+        p_info = PHILOSOPHER_LIBRARY.get(p_key, {})
+        p_name = p_info.get("name", self.philosopher)
+        if self.side:
+            return f"{p_name} ({self.side})"
+        return p_name
 
     def _system_prompt(self) -> str:
         return FREE_TOPIC_SYSTEM_PROMPT if self.side == "Free Topic" else SYSTEM_PROMPT
@@ -642,7 +653,11 @@ class DebateAgent:
         approved_arg = ""
         counter_arg = ""
         max_attempts = self.team_config.get("max_review_attempts", TEAM_MAX_REVIEW_ATTEMPTS)
-        speaker_agent = TeamSpeaker(name=self.name, image=info_a["image"], side=self.side)
+        if self.side:
+            speaker_name = f"{info_a['name']} ({self.side})"
+        else:
+            speaker_name = info_a['name']
+        speaker_agent = TeamSpeaker(name=speaker_name, image=info_a["image"], side=self.side)
         
         for attempt in range(1, max_attempts + 1):
             # 2.1. Generate Candidate Pro-Argument (Support)
@@ -861,7 +876,7 @@ class DebateAgent:
         return {
             "text": approved_arg,
             "team_trace": trace,
-            "speaker_name": self.name,
+            "speaker_name": speaker_name,
             "speaker_image": info_a["image"]
         }
 
@@ -992,6 +1007,7 @@ def run_debate(
     agents = build_agents(agent_configs)
     for r in range(1, rounds + 1):
         for i, agent in enumerate(agents):
+            display_name = agent.get_supporting_name() if team_mode else agent.name
             res = agent.respond(
                 topic, 
                 transcript, 
@@ -1000,7 +1016,7 @@ def run_debate(
                 max_words, 
                 team_mode, 
                 on_step=(
-                    lambda msg, agent_name=agent.name, round_idx=r:
+                    lambda msg, agent_name=display_name, round_idx=r:
                     on_step(f"Round {round_idx}: {agent_name} — {msg}")
                 ) if on_step else None,
                 on_token=(
@@ -1016,7 +1032,7 @@ def run_debate(
             if team_mode:
                 speaker_name = res.get("speaker_name", agent.name)
                 speaker_image = res.get("speaker_image", agent.image)
-                turn = {"round": r, "speaker": speaker_name, "text": res["text"]}
+                turn = {"round": r, "speaker": speaker_name, "text": res["text"], "avatar": speaker_image}
                 if "team_trace" in res: turn["team_trace"] = res["team_trace"]
                 transcript.append(turn)
                 speaker_agent = TeamSpeaker(name=speaker_name, image=speaker_image, side=agent.side)
@@ -1030,7 +1046,7 @@ def run_debate(
                         yield token
                     
                     cleaned = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL).strip()
-                    turn = {"round": r, "speaker": agent.name, "text": cleaned}
+                    turn = {"round": r, "speaker": agent.name, "text": cleaned, "avatar": agent.image}
                     transcript.append(turn)
                     
                 yield {"type": "single", "agent": agent, "generator": intercept_generator(), "transcript": transcript}

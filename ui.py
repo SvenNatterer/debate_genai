@@ -1811,7 +1811,7 @@ def render_generation_snapshot(include_transcript: bool = True) -> None:
     if include_transcript:
         for turn in transcript:
             speaker = turn.get("speaker", "Agent")
-            avatar = avatar_by_speaker.get(speaker)
+            avatar = turn.get("avatar") or avatar_by_speaker.get(speaker)
             if avatar:
                 message = st.chat_message(speaker, avatar=avatar)
             else:
@@ -2373,22 +2373,39 @@ def render_arena_stage() -> None:
     phil2  = st.session_state.get("agent2_philosopher_name", "Player 2")
     label1 = st.session_state.get("agent1_model_label", "")
     label2 = st.session_state.get("agent2_model_label", "")
+    philosopher_teams = st.session_state.get("philosopher_teams", False)
+    team_configs = st.session_state.get("_dp_team_configs") or {}
+
     if label1 or label2:
         if free_topic_mode:
+            team_label = f"{phil1} (Free Topic Team)"
+            if philosopher_teams and isinstance(team_configs, dict):
+                supporting = team_configs.get("free", {}).get("agent_a", {}).get("philosopher_name", "")
+                if supporting:
+                    team_label = f"{phil1} (Free Topic Team — Support: {supporting})"
             rows = (
                 f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-                f'<span style="color:#e8ecff;">{phil1} (Free Topic Team)</span>'
+                f'<span style="color:#e8ecff;">{team_label}</span>'
                 f'<span style="color:#ffd54a; font-size:0.85rem;">{label1}</span>'
                 f'</div>'
             )
         else:
+            team_label1 = f"{phil1} (Pro)"
+            team_label2 = f"{phil2} (Contra)"
+            if philosopher_teams and isinstance(team_configs, dict):
+                supporting1 = team_configs.get("for", {}).get("agent_a", {}).get("philosopher_name", "")
+                supporting2 = team_configs.get("against", {}).get("agent_a", {}).get("philosopher_name", "")
+                if supporting1:
+                    team_label1 = f"{phil1} (Pro — Support: {supporting1})"
+                if supporting2:
+                    team_label2 = f"{phil2} (Contra — Support: {supporting2})"
             rows = (
                 f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-                f'<span style="color:#e8ecff;">{phil1} (Pro)</span>'
+                f'<span style="color:#e8ecff;">{team_label1}</span>'
                 f'<span style="color:#ffd54a; font-size:0.85rem;">{label1}</span>'
                 f'</div>'
                 f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-                f'<span style="color:#e8ecff;">{phil2} (Contra)</span>'
+                f'<span style="color:#e8ecff;">{team_label2}</span>'
                 f'<span style="color:#ffd54a; font-size:0.85rem;">{label2}</span>'
                 f'</div>'
             )
@@ -2581,7 +2598,7 @@ def render_summary_stage() -> None:
         rows = _summary_display_rows(
             summary,
             transcript,
-            use_transcript_speakers=free_topic_mode,
+            use_transcript_speakers=True,
         )
         if free_topic_mode and rows:
             speaker_part, rest = rows[0]
