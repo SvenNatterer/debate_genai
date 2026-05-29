@@ -52,24 +52,24 @@ def extract_winner(text: str, transcript: list) -> str:
     return "N/A"
 
 transcript = [
-    {"speaker": "Socrates (Supporting)"},
-    {"speaker": "Friedrich Nietzsche (Counter)"}
+    {"speaker": "Socrates (Pro)"},
+    {"speaker": "Friedrich Nietzsche (Contra)"}
 ]
 
 test_cases = [
-    ("winner: Friedrich Nietzsche (Counter)", "Friedrich Nietzsche (Counter)"),
-    ("winner: **Friedrich Nietzsche (Counter)**", "Friedrich Nietzsche (Counter)"),
-    ("winner: Friedrich Nietzsche", "Friedrich Nietzsche (Counter)"),
-    ("winner: **Friedrich Nietzsche**", "Friedrich Nietzsche (Counter)"),
-    ("Winner: Socrates", "Socrates (Supporting)"),
-    ("winner: Socrates (Supporting)", "Socrates (Supporting)"),
-    ("Winner is Socrates.", "Socrates (Supporting)"),
-    ("Friedrich Nietzsche wins this round.", "Friedrich Nietzsche (Counter)"),
-    ("gewinner: Friedrich Nietzsche (Counter)", "Friedrich Nietzsche (Counter)"),
-    ("gewinner: **Friedrich Nietzsche**", "Friedrich Nietzsche (Counter)"),
-    ("Gewinner ist Socrates.", "Socrates (Supporting)"),
-    ("Friedrich Nietzsche gewinnt diesen Kampf.", "Friedrich Nietzsche (Counter)"),
-    ("Socrates ist der Gewinner.", "Socrates (Supporting)"),
+    ("winner: Friedrich Nietzsche (Contra)", "Friedrich Nietzsche (Contra)"),
+    ("winner: **Friedrich Nietzsche (Contra)**", "Friedrich Nietzsche (Contra)"),
+    ("winner: Friedrich Nietzsche", "Friedrich Nietzsche (Contra)"),
+    ("winner: **Friedrich Nietzsche**", "Friedrich Nietzsche (Contra)"),
+    ("Winner: Socrates", "Socrates (Pro)"),
+    ("winner: Socrates (Pro)", "Socrates (Pro)"),
+    ("Winner is Socrates.", "Socrates (Pro)"),
+    ("Friedrich Nietzsche wins this round.", "Friedrich Nietzsche (Contra)"),
+    ("gewinner: Friedrich Nietzsche (Contra)", "Friedrich Nietzsche (Contra)"),
+    ("gewinner: **Friedrich Nietzsche**", "Friedrich Nietzsche (Contra)"),
+    ("Gewinner ist Socrates.", "Socrates (Pro)"),
+    ("Friedrich Nietzsche gewinnt diesen Kampf.", "Friedrich Nietzsche (Contra)"),
+    ("Socrates ist der Gewinner.", "Socrates (Pro)"),
     ("We have no winner today.", "N/A")
 ]
 
@@ -169,10 +169,10 @@ def clean_judge_reasoning(text: str, transcript: list[dict]) -> str:
 
 
 # Test clean_judge_reasoning
-raw_judge_text_multiple = """Socrates (Supporting): 7/10, logical validity: 5/10, argument strength: 8/10, counterargument handling: 8/10, clarity: 9/10, relevance: 8/10, overall total: 37/50. Begründung: This score reflects Socrates' ability to articulate a nuanced and balanced perspective that acknowledges the importance of individual autonomy while still prioritizing the common good.
+raw_judge_text_multiple = """Socrates (Pro): 7/10, logical validity: 5/10, argument strength: 8/10, counterargument handling: 8/10, clarity: 9/10, relevance: 8/10, overall total: 37/50. Begründung: This score reflects Socrates' ability to articulate a nuanced and balanced perspective that acknowledges the importance of individual autonomy while still prioritizing the common good.
 
-Friedrich Nietzsche (Counter): 8/10, logical validity: 9/10, argument strength: 9/10, counterargument handling: 9/10, clarity: 8/10, relevance: 9/10, overall total: 53/60. Begründung: This score highlights Nietzsche's compelling and well-supported arguments that effectively challenge Socrates' views on individual autonomy and the common good.
-Winner: Friedrich Nietzsche (Counter)"""
+Friedrich Nietzsche (Contra): 8/10, logical validity: 9/10, argument strength: 9/10, counterargument handling: 9/10, clarity: 8/10, relevance: 9/10, overall total: 53/60. Begründung: This score highlights Nietzsche's compelling and well-supported arguments that effectively challenge Socrates' views on individual autonomy and the common good.
+Winner: Friedrich Nietzsche (Contra)"""
 
 expected_cleaned_multiple = """Begründung: This score reflects Socrates' ability to articulate a nuanced and balanced perspective that acknowledges the importance of individual autonomy while still prioritizing the common good.
 

@@ -115,13 +115,13 @@ MAX_ARGUMENT_ROUNDS = 5
 TEAM_SIDE_KEYS = ("for", "against")
 TEAM_CONFIG_SIDE_KEYS = ("for", "against", "free")
 TEAM_SIDE_LABELS = {
-    "for": "Supporting team",
-    "against": "Counter team",
+    "for": "Pro Team",
+    "against": "Contra Team",
     "free": "Free topic team",
 }
 TEAM_ROLE_DEFS = (
-    ("agent_a", "Strategist A", "socrates"),
-    ("agent_b", "Strategist B", "nietzsche"),
+    ("agent_a", "Support", "socrates"),
+    ("agent_b", "Counter", "nietzsche"),
     ("reviewer", "Critic & Speaker", "aristotle"),
 )
 TEAM_DEFAULTS_VERSION = 4
@@ -1676,11 +1676,11 @@ def render_character_stage() -> None:
         judge_roles = JUDGE_ROLE_LABELS[num_judges]
         rows = (
             f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-            f'<span style="color:#e8ecff;">{agent1_name} <span style="color:#aaa;font-size:0.8rem;">(Supporting)</span></span>'
+            f'<span style="color:#e8ecff;">{agent1_name} <span style="color:#aaa;font-size:0.8rem;">(Pro)</span></span>'
             f'<span style="color:#ffd54a;font-size:0.85rem;">{agent1_model_label}</span>'
             f'</div>'
             f'<div style="display:flex;justify-content:space-between;margin-bottom:3px;">'
-            f'<span style="color:#e8ecff;">{agent2_name} <span style="color:#aaa;font-size:0.8rem;">(Counter)</span></span>'
+            f'<span style="color:#e8ecff;">{agent2_name} <span style="color:#aaa;font-size:0.8rem;">(Contra)</span></span>'
             f'<span style="color:#ffd54a;font-size:0.85rem;">{agent2_model_label}</span>'
             f'</div>'
         )
@@ -2035,8 +2035,8 @@ def handle_run_debate() -> None:
                 "provider":    agent1_provider,
                 "model":       agent1_model,
                 "model_label": agent1_model_label,
-                "display_name": f"{agent1_name} (Supporting)",
-                "side":        "Supporting",
+                "display_name": f"{agent1_name} (Pro)",
+                "side":        "Pro",
                 "team_config": for_team_config,
             },
             {
@@ -2045,8 +2045,8 @@ def handle_run_debate() -> None:
                 "provider":    agent2_provider,
                 "model":       agent2_model,
                 "model_label": agent2_model_label,
-                "display_name": f"{agent2_name} (Counter)",
-                "side":        "Counter",
+                "display_name": f"{agent2_name} (Contra)",
+                "side":        "Contra",
                 "team_config": against_team_config,
             },
         ]
@@ -2384,11 +2384,11 @@ def render_arena_stage() -> None:
         else:
             rows = (
                 f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-                f'<span style="color:#e8ecff;">{phil1} (Supporting)</span>'
+                f'<span style="color:#e8ecff;">{phil1} (Pro)</span>'
                 f'<span style="color:#ffd54a; font-size:0.85rem;">{label1}</span>'
                 f'</div>'
                 f'<div style="display:flex; justify-content:space-between; margin-bottom:2px;">'
-                f'<span style="color:#e8ecff;">{phil2} (Counter)</span>'
+                f'<span style="color:#e8ecff;">{phil2} (Contra)</span>'
                 f'<span style="color:#ffd54a; font-size:0.85rem;">{label2}</span>'
                 f'</div>'
             )
