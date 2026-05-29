@@ -24,6 +24,5 @@ audio_latency_log.json
 # Video recordings
 *.webm
 *.mp4
-*.mov
 *.avi
 *.mkv
