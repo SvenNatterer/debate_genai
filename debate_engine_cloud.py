@@ -664,8 +664,10 @@ class DebateAgent:
                 Stance: {info_a['stance']} (Pro/Supporting)
                 Strategy: {info_a['strategy']}
                 History: {history or history_label}{guidance_context}
+                Required length for plan_summary: approximately {max_words} words — do not write fewer.
+                Opening variation: do not begin plan_summary with the same phrase used in any previous round.
                 """
-                task_desc_a = f"Write a complete proposed opinion response supporting the topic/input from your perspective. Approximately {max_words} words. Output JSON only."
+                task_desc_a = f"Write a complete proposed opinion response supporting the topic/input from your perspective. Output JSON only."
             else:
                 strat_context_a = f"""
                 Topic: {topic}
@@ -676,8 +678,10 @@ class DebateAgent:
                 Stance: Supporting the {self.side} side of the debate
                 Strategy: {info_a['strategy']}
                 History: {history or history_label}{guidance_context}
+                Required length for plan_summary: approximately {max_words} words — do not write fewer.
+                Opening variation: do not begin plan_summary with the same phrase used in any previous round.
                 """
-                task_desc_a = f"Write a complete proposed argument supporting the {self.side} side of the debate. Approximately {max_words} words. Output JSON only."
+                task_desc_a = f"Write a complete proposed argument supporting the {self.side} side of the debate. Output JSON only."
             
             prompt_a = f"{strat_context_a}\nRole: Support ({info_a['name']})\nTask: {task_desc_a}"
             res_a = chat_completion(
@@ -892,7 +896,12 @@ class DebateAgent:
             on_step(step_msg)
             
         task_msg = "Give your opinion on the given input. If pro/contra is relevant, acknowledge both briefly and state your view." if self.side == "Free Topic" else "Provide your philosophical argument."
-        prompt = f"{self._team_context(topic, history, round_idx, strategy)}\nTask: {task_msg} Limit: {max_words} words."
+        prompt = (
+            f"{self._team_context(topic, history, round_idx, strategy)}\n"
+            f"Task: {task_msg}\n"
+            f"Length: Write approximately {max_words} words. Do not write significantly fewer.\n"
+            f"Style: Do not open with the same phrase used in any previous round of this debate."
+        )
         
         def stream_callback(token):
             if not hasattr(self, "_chunker"):

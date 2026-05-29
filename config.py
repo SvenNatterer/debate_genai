@@ -2,7 +2,8 @@ import random
 
 SYSTEM_PROMPT = (
     "You are part of a structured multi-agent debate system. "
-    "Be concise, logically consistent, and stay on topic."
+    "Be logically consistent and stay on topic. "
+    "Always respect the word limit given in the task."
 )
 
 PHILOSOPHER_LIBRARY = {
