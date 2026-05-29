@@ -122,9 +122,9 @@ TEAM_SIDE_LABELS = {
 TEAM_ROLE_DEFS = (
     ("agent_a", "Support", "socrates"),
     ("agent_b", "Counter", "nietzsche"),
-    ("reviewer", "Critic & Speaker", "aristotle"),
+    ("reviewer", "Critic", "aristotle"),
 )
-TEAM_DEFAULTS_VERSION = 4
+TEAM_DEFAULTS_VERSION = 5
 
 
 def _local_model_label() -> str:
@@ -154,7 +154,7 @@ _DEBATE_PARAM_KEYS = [
 
 def reset_game() -> None:
     st.session_state["stage"] = 0
-    st.session_state["selected_topic"] = random_topic()
+    st.session_state["selected_topic"] = "Consciousness cannot be fully explained by physical processes."
     st.session_state["rounds"] = DEFAULT_ARGUMENT_ROUNDS
     st.session_state["player1_strategy"] = STRATEGY_OPTIONS[0]
     st.session_state["player2_strategy"] = STRATEGY_OPTIONS[0]
@@ -299,7 +299,7 @@ def ensure_session_state() -> None:
         reset_game()
         return
 
-    st.session_state.setdefault("selected_topic", random_topic())
+    st.session_state.setdefault("selected_topic", "Consciousness cannot be fully explained by physical processes.")
     st.session_state.setdefault("rounds", DEFAULT_ARGUMENT_ROUNDS)
     st.session_state.setdefault("player1_strategy", STRATEGY_OPTIONS[0])
     st.session_state.setdefault("player2_strategy", STRATEGY_OPTIONS[0])
@@ -2653,9 +2653,8 @@ def render_summary_stage() -> None:
                     st.caption(role_summary)
                 st.caption(
                     "The philosopher team internally generated two opinion angles. "
-                    "When the input allows it, A explores a supportive/pro angle and B explores a skeptical/contra angle. "
-                    "A critic selected the plan that best answers the input. "
-                    "A speaker then wrote a draft based on that plan, which the critic reviewed for quality."
+                    "When the input allows it, Support explores a supportive/pro angle and Counter explores a skeptical/contra angle. "
+                    "The Critic evaluated both angles, selected the stronger perspective, and refined it into the final opinion."
                 )
 
                 if candidates:
