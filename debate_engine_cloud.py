@@ -640,7 +640,7 @@ class DebateAgent:
         approved_arg = ""
         counter_arg = ""
         max_attempts = self.team_config.get("max_review_attempts", TEAM_MAX_REVIEW_ATTEMPTS)
-        speaker_agent = TeamSpeaker(name=info_a["name"], image=info_a["image"], side=self.side)
+        speaker_agent = TeamSpeaker(name=self.name, image=info_a["image"], side=self.side)
         
         for attempt in range(1, max_attempts + 1):
             # 2.1. Generate Candidate Pro-Argument (Strategist A)
@@ -663,7 +663,7 @@ class DebateAgent:
                 Strategy: {info_a['strategy']}
                 History: {history or history_label}{guidance_context}
                 """
-                task_desc_a = "Write a complete proposed opinion response supporting the topic/input from your perspective. Output JSON only."
+                task_desc_a = f"Write a complete proposed opinion response supporting the topic/input from your perspective. Approximately {max_words} words. Output JSON only."
             else:
                 strat_context_a = f"""
                 Topic: {topic}
@@ -675,7 +675,7 @@ class DebateAgent:
                 Strategy: {info_a['strategy']}
                 History: {history or history_label}{guidance_context}
                 """
-                task_desc_a = f"Write a complete proposed argument supporting the {self.side} side of the debate. Output JSON only."
+                task_desc_a = f"Write a complete proposed argument supporting the {self.side} side of the debate. Approximately {max_words} words. Output JSON only."
             
             prompt_a = f"{strat_context_a}\nRole: Strategist ({info_a['name']})\nTask: {task_desc_a}"
             res_a = chat_completion(
@@ -855,7 +855,7 @@ class DebateAgent:
         return {
             "text": approved_arg,
             "team_trace": trace,
-            "speaker_name": info_a["name"],
+            "speaker_name": self.name,
             "speaker_image": info_a["image"]
         }
 
