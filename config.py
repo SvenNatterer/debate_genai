@@ -235,7 +235,7 @@ AGENT_LIBRARY = {
 
 
 TOPIC_POOL = [
-    # ── ORIGINAL (STATEMENTS) ──────────────────────────────────────────────────
+    # ── GENERAL STATEMENTS ──────────────────────────────────────────────────
     "Human life has an objective meaning.",
     "AI will reduce human creativity overall.",
     "Human nature is fundamentally good.",
@@ -248,21 +248,6 @@ TOPIC_POOL = [
     "The individual should submit to the common good.",
     "Certain knowledge is possible.",
     "Technological progress does more good than harm.",
-
-    # ── ORIGINAL (QUESTIONS) ───────────────────────────────────────────────────
-    "What is the meaning of life?",
-    "Will AI kill human creativity?",
-    "Is human nature fundamentally good or selfish?",
-    "Do humans truly have free will, or is everything determined?",
-    "Is happiness the highest goal in life?",
-    "Is it ever morally acceptable to lie?",
-    "Is justice more important than freedom?",
-    "Does life have an objective meaning?",
-    "Are morality and ethics universal, or culturally relative?",
-    "Is suffering necessary for personal growth?",
-    "Should the individual submit to the common good?",
-    "Can we ever have certain knowledge?",
-
 
     # ── MIND, IDENTITY & CONSCIOUSNESS ───────────────────────────────────────
     "A sufficiently advanced AI deserves moral consideration.",

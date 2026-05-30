@@ -1393,12 +1393,12 @@ def render_start_screen() -> None:
 
     mode_col1, mode_col2, mode_col3 = st.columns(3)
     with mode_col1:
-        if st.button("Single Philosopher Mode", type="primary", use_container_width=True):
+        if st.button("Single-Philosopher Mode", type="primary", use_container_width=True):
             _save_start_preferences(False, "single")
             st.session_state["stage"] = 1
             st.rerun()
     with mode_col2:
-        if st.button("Team Philosopher Mode", type="primary", use_container_width=True):
+        if st.button("Multi-Philosopher Mode", type="primary", use_container_width=True):
             _save_start_preferences(True, "team")
             st.session_state["stage"] = 1
             st.rerun()
