@@ -154,7 +154,7 @@ _DEBATE_PARAM_KEYS = [
 
 def reset_game() -> None:
     st.session_state["stage"] = 0
-    st.session_state["selected_topic"] = "Consciousness cannot be fully explained by physical processes."
+    st.session_state["selected_topic"] = random_topic()
     st.session_state["rounds"] = DEFAULT_ARGUMENT_ROUNDS
     st.session_state["player1_strategy"] = STRATEGY_OPTIONS[0]
     st.session_state["player2_strategy"] = STRATEGY_OPTIONS[0]
@@ -299,7 +299,7 @@ def ensure_session_state() -> None:
         reset_game()
         return
 
-    st.session_state.setdefault("selected_topic", "Consciousness cannot be fully explained by physical processes.")
+    st.session_state.setdefault("selected_topic", random_topic())
     st.session_state.setdefault("rounds", DEFAULT_ARGUMENT_ROUNDS)
     st.session_state.setdefault("player1_strategy", STRATEGY_OPTIONS[0])
     st.session_state.setdefault("player2_strategy", STRATEGY_OPTIONS[0])

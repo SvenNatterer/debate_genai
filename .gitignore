@@ -25,3 +25,6 @@ audio_latency_log.json
 *.webm
 *.avi
 *.mkv
+
+# Reports
+report/
